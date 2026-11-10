@@ -40,10 +40,36 @@ h1 {
   line-height: 1.1;
   margin: 0;
 }
-.status {
+.connection {
   color: #596762;
   font-size: 16px;
   line-height: 1.5;
+  margin: 16px 0;
+}
+.connection p {
+  margin: 4px 0;
+}
+.connection .connected {
+  color: #286745;
+  font-weight: 700;
+}
+.connection .unavailable {
+  color: #a23b31;
+  font-weight: 700;
+}
+button {
+  align-self: flex-start;
+  border: 1px solid #39735c;
+  background: #fff;
+  color: #234c3c;
+  padding: 10px 16px;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 3px solid #ae633d;
+  outline-offset: 3px;
 }
 footer {
   color: #687772;
