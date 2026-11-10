@@ -1,6 +1,6 @@
 # Lokvyn
 
-Lokvyn is a desktop GUI project initially focused on Ollama. It checks the local Ollama connection; model browsing is not implemented yet. Support for other services is a future consideration, not an implemented feature.
+Lokvyn is a desktop GUI project initially focused on Ollama. It checks the local Ollama connection and lists installed model names with refresh and retry. Model details and support for other services are not implemented yet.
 
 The application connects only to `127.0.0.1:11434` and does not start Ollama. Start Ollama separately to see the connected state. The address is not configurable.
 

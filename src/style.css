@@ -26,7 +26,9 @@ section {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
+  padding: 48px 0;
+  width: 100%;
   max-width: 680px;
 }
 .eyebrow {
@@ -70,6 +72,33 @@ button {
 button:focus-visible {
   outline: 3px solid #ae633d;
   outline-offset: 3px;
+}
+.models {
+  margin-top: 32px;
+  border-top: 1px solid #d3ded8;
+  padding-top: 20px;
+}
+.models-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.models h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.models ul {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  border-top: 1px solid #d3ded8;
+}
+.models li {
+  padding: 14px 0;
+  border-bottom: 1px solid #d3ded8;
+  overflow-wrap: anywhere;
 }
 footer {
   color: #687772;
