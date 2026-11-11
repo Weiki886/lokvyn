@@ -1,49 +1,63 @@
-# Lokvyn 首版架构草案
+# Lokvyn Architecture Draft
 
-状态：**待评审**。本方案为 [Issue #2](https://github.com/Weiki886/lokvyn/issues/2) 的讨论输入，不代表 [Issue #1](https://github.com/Weiki886/lokvyn/issues/1) 的产品范围已确认，也不代表功能已实现。
+**Status: Draft for review.** This document describes the current implementation and proposes boundaries for the Ollama-focused desktop client. It does not finalize the product scope in [Issue #1](https://github.com/Weiki886/lokvyn/issues/1), nor does it claim that unresolved decisions have been accepted.
 
-## 目标与范围
+## Product Boundary
 
-Lokvyn 是桌面 GUI，首轮以已安装并运行的 Ollama 为目标。建议先支持连接状态、模型列表、刷新与详情。对话、模型下载与删除、历史记录和其他服务暂不纳入该草案的实现范围；是否纳入首版仍由 #1 决定。
+The current application can detect a local Ollama service, list installed models, refresh the list, and display selected model metadata. These are implemented capabilities, not a final decision about the complete first-release feature set.
 
-建议优先在 macOS 开发和验证。Windows、Linux 的支持、安装包、签名及发布方式尚未确定，不能据此宣称跨平台已验证。
+The application currently targets `127.0.0.1:11434`. It does not start Ollama, manage model files, provide chat, or persist conversations or settings. Whether chat, model downloads or deletion, history, or a configurable service address belong in the first release remains open in Issue #1. Other model services are future possibilities only; a generic provider framework is not part of the current implementation.
 
-## 技术选择
+macOS is the documented development and CI environment. Windows, Linux, release packaging, signing, and distribution have not been confirmed or validated.
 
-| 职责 | 方向 | 取舍 |
+## Technology Decisions
+
+| Area | Current choice | Rationale and boundary |
 | --- | --- | --- |
-| 桌面容器 | Tauri 2 和 Rust | 使用原生桌面能力；权限与通信按实际需求收紧。 |
-| 界面 | React 和 TypeScript | 承担展示、导航和交互状态；版本及具体工具链在工程初始化时确定。 |
-| 存储 | 暂不引入数据库 | 当前只读浏览可直接查询服务；若确认会话历史或配置持久化需求，再评估 SQLite 或更简单的方式。 |
+| Desktop shell | Tauri 2 with Rust | Provides the native window and a Rust-owned local-service request boundary. |
+| User interface | React and TypeScript | Owns presentation, navigation, and transient loading, success, empty, and error states. |
+| Persistence | None | Current views read live Ollama responses and do not require a local database. Revisit only if an accepted feature needs durable state. |
+| Build and checks | npm, Vite, TypeScript, Vitest, Cargo | Lockfiles and macOS CI are in place; the documented commands are listed in the README. |
 
-## 职责与数据流
+These are the choices reflected by the merged implementation. A future design change still requires review against the product requirements and target platforms.
 
-下面是拟议职责，不是现有模块或已实现接口：
+## Current Responsibilities and Data Flow
 
-1. 界面负责触发刷新或详情查询，展示加载、空、失败及恢复状态；不把不可用字段当成事实。
-2. Ollama 通信职责集中处理请求、响应转换、超时和错误映射，向界面提供足够表达当前功能的数据。应用以服务响应为当前数据来源，不把缓存当作权威数据。
-3. Tauri 桌面层负责应用生命周期及经批准的原生能力。前端直连与通过 Rust 发起请求仍需比较权限、平台行为、测试难度及实际 Tauri 配置，验证后再决定。
-4. 请求路径为：用户操作 → 界面状态 → Ollama 通信职责 → 已配置的 Ollama 服务 → 映射结果 → 界面。具体模块和 IPC 契约在通信方式确定后定义。
+1. The React UI invokes Tauri commands and renders the returned connection version, model names, and available details. UI state is transient; the service response is the source of truth.
+2. Rust owns all Ollama HTTP requests. The current commands call `GET /api/version`, `GET /api/tags`, and `POST /api/show` on the fixed loopback address.
+3. The Rust layer validates the expected response fields and maps request failures to a generic unavailable error. Model details are limited to format, family, parameter size, and quantization level; absent values are omitted.
+4. The UI distinguishes connection failure from an empty model list, supports retry and refresh, and allows navigation between the list and a selected model's details.
 
-只隔离当前 Ollama 相关职责，不预建 provider 注册系统、通用接口、插件机制或其他服务实现；未来扩展应基于真实需求重新设计。
+The current request flow is:
 
-## 连接、安全与隐私
+`User action -> React state -> Tauri IPC command -> Rust HTTP client -> local Ollama -> validated response -> React state`
 
-- 建议默认连接本机 Ollama。是否支持配置地址或远程服务由 #1 决定；未决定前不承诺提供这些能力。
-- 连接、列表、详情请求均需有可恢复的失败状态和有界等待；服务不可用与已连接但列表为空必须区分。模型在查询期间被删除时，详情查询失败应可返回或重试。
-- 最小化 Tauri 权限和网络访问范围，不新增服务监听、自动遥测或向第三方发送数据。具体 CSP、允许的目标地址、重定向及外部输入限制须在选定通信方案时确定并测试。
-- 模型名及服务响应视作不可信输入；错误与日志不应泄露凭据、用户内容或敏感地址。暂不设计凭据存储，远程认证需求需另行评审。
+The Rust client disables proxy use and redirects, uses a three-second request timeout, and bounds response bodies (4 KiB for the version response and 4 MiB for model-list and detail responses). These limits are implementation facts and should be revisited if supported Ollama responses require different bounds.
 
-## 验证策略
+## Security and Privacy
 
-- 使用可控响应测试连接成功、失败、超时、重试、空列表、模型切换、缺失字段及详情失败；常规测试不依赖真实服务。
-- 使用真实本地 Ollama 人工核对列表与详情，分别验证停止服务和恢复后的状态；注明服务版本和测试平台，不推断其他平台兼容性。
-- 工程初始化后，在支持环境执行格式、静态检查、测试和构建；CI 的实际结果与本地验证分别记录。
+- Requests are restricted in application code to the loopback Ollama endpoint; the address is not user-configurable. Do not add remote targets or address overrides without product and security review.
+- No Ollama request is made directly from the webview. The Rust layer validates service data, disables redirects and proxies, applies time and response-size bounds, and returns only the fields required by the UI.
+- The current Tauri configuration declares a restrictive content security policy. Any new webview capability or network destination must be justified and covered by review and tests.
+- Model names and service responses are untrusted input. Do not log model content, credentials, or sensitive user data. The current application does not add telemetry or send data to third parties.
+- The application does not store credentials, model content, conversations, or settings.
 
-## 未决事项
+## Validation Strategy
 
-- #1：首版是否包含对话、管理模型、持久化和自定义地址；目标平台及分发方式。
-- #2：前端直连还是 Rust 通信、具体权限与安全配置、错误模型及 IPC 契约。
-- 工程初始化：包管理器、依赖版本、CI 环境、自动化 UI 测试工具和运行命令。
+- Keep routine frontend and Rust tests independent of a running Ollama service by using controlled responses.
+- Cover connection success and failure, timeouts, rejected redirects, response-size limits, malformed payloads, empty model lists, refresh, missing detail fields, and detail failures.
+- The ignored Rust integration tests can compare connection, model-list, and model-detail results with a real local Ollama service. Record the service version and platform when running them.
+- Treat frontend unit tests, Rust tests, Tauri builds, native-window checks, and real-service checks as separate evidence. A successful web build does not prove that native IPC or a packaged application works.
+- CI currently runs the repository checks and a Tauri build on macOS. It does not establish support for other operating systems or distribution formats.
 
-这些决策完成前，后续实现只能针对已确认的范围推进；本草案需要产品与架构评审，不关闭 #1 或 #2。
+## Open Decisions
+
+The following decisions remain open and must be resolved through product or architecture review before the related scope is treated as committed:
+
+- **First-release scope (Issue #1):** whether to include chat, model download or deletion, conversation history, or a configurable Ollama address.
+- **Supported platforms and distribution (Issue #1):** whether Windows or Linux are targets, and whether installers, signing, or release distribution are required.
+- **Network boundary:** whether the fixed local-only connection remains the permanent product boundary. Remote Ollama access would change the privacy and security assumptions and is not implied by future provider extensibility.
+- **Future service integrations (Issue #2):** no generic adapter, provider registry, plugin system, or non-Ollama service is implemented. Reassess the extension boundary when a concrete second-service requirement exists.
+- **Native UI acceptance:** automated browser tests do not exercise Tauri IPC or verify the native window. The desktop workflow and real-service integration still need explicit acceptance on a confirmed target environment.
+
+Issue #2 should remain open until the architecture is reviewed against the decisions in Issue #1 and its acceptance criteria are explicitly confirmed.
