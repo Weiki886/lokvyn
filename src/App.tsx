@@ -9,6 +9,16 @@ type Models =
   | { state: "loading" }
   | { state: "loaded"; names: string[] }
   | { state: "error" };
+type ModelDetails = {
+  format: string | null;
+  family: string | null;
+  parameter_size: string | null;
+  quantization_level: string | null;
+};
+type Details =
+  | { state: "loading" }
+  | { state: "loaded"; value: ModelDetails }
+  | { state: "error" };
 
 export default function App() {
   const [connection, setConnection] = useState<Connection>({
@@ -17,6 +27,9 @@ export default function App() {
   const [attempt, setAttempt] = useState(0);
   const [models, setModels] = useState<Models>({ state: "loading" });
   const [refresh, setRefresh] = useState(0);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [details, setDetails] = useState<Details>({ state: "loading" });
+  const [detailsAttempt, setDetailsAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -49,9 +62,38 @@ export default function App() {
     };
   }, [connection, refresh]);
 
+  useEffect(() => {
+    if (!selectedModel) return;
+    let active = true;
+    invoke<ModelDetails>("ollama_model_details", {
+      modelName: selectedModel,
+    }).then(
+      (value) => {
+        if (active) setDetails({ state: "loaded", value });
+      },
+      () => {
+        if (active) setDetails({ state: "error" });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [selectedModel, detailsAttempt]);
+
   function refreshModels() {
     setModels({ state: "loading" });
     setRefresh((n) => n + 1);
+  }
+
+  function openModel(name: string) {
+    setDetails({ state: "loading" });
+    setSelectedModel(name);
+    setDetailsAttempt((attempt) => attempt + 1);
+  }
+
+  function retryDetails() {
+    setDetails({ state: "loading" });
+    setDetailsAttempt((attempt) => attempt + 1);
   }
 
   return (
@@ -62,7 +104,7 @@ export default function App() {
         <h1 id="title">Lokvyn</h1>
         <div className="connection" role="status" aria-live="polite">
           {connection.state === "connecting" && <p>Connecting to Ollama...</p>}
-          {connection.state === "connected" && (
+          {connection.state === "connected" && selectedModel === null && (
             <>
               <p className="connected">Connected</p>
               <p>Version {connection.version}</p>
@@ -111,10 +153,56 @@ export default function App() {
             {models.state === "loaded" && models.names.length > 0 && (
               <ul>
                 {models.names.map((name, index) => (
-                  <li key={`${name}-${index}`}>{name}</li>
+                  <li key={`${name}-${index}`}>
+                    <button type="button" onClick={() => openModel(name)}>
+                      {name}
+                    </button>
+                  </li>
                 ))}
               </ul>
             )}
+          </div>
+        )}
+        {connection.state === "connected" && selectedModel !== null && (
+          <div className="model-details" aria-labelledby="details-title">
+            <div className="models-heading">
+              <h2 id="details-title">{selectedModel}</h2>
+              <button type="button" onClick={() => setSelectedModel(null)}>
+                Back to models
+              </button>
+            </div>
+            <div role="status" aria-live="polite">
+              {details.state === "loading" && <p>Loading model details...</p>}
+              {details.state === "error" && <p>Could not load model details</p>}
+              {details.state === "loaded" &&
+                !Object.values(details.value).some(Boolean) && (
+                  <p>Model details unavailable</p>
+                )}
+            </div>
+            {details.state === "error" && (
+              <button type="button" onClick={retryDetails}>
+                Retry details
+              </button>
+            )}
+            {details.state === "loaded" &&
+              Object.values(details.value).some(Boolean) && (
+                <dl className="detail-list">
+                  {[
+                    ["Format", details.value.format],
+                    ["Family", details.value.family],
+                    ["Parameters", details.value.parameter_size],
+                    ["Quantization", details.value.quantization_level],
+                  ].map(
+                    ([label, value]) =>
+                      value && (
+                        <div key={label}>
+                          <dt>{label}</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      ),
+                  )}
+                </dl>
+              )}
           </div>
         )}
       </section>

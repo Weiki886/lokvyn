@@ -87,3 +87,70 @@ describe("installed models", () => {
     expect(await screen.findByText("model:latest")).toBeTruthy();
   });
 });
+
+describe("model details", () => {
+  it("opens a model, switches to another, and returns to the list", async () => {
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_models")
+        return Promise.resolve(["alpha:latest", "beta:latest"]);
+      const modelName = (args as { modelName: string }).modelName;
+      return Promise.resolve({
+        format: "gguf",
+        family: modelName.startsWith("alpha") ? "llama" : "qwen",
+        parameter_size: "8B",
+        quantization_level: "Q4_K_M",
+      });
+    });
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "alpha:latest" }),
+    );
+    expect(await screen.findByText("llama")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "beta:latest" }));
+    expect(await screen.findByText("qwen")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to models" }));
+    expect(
+      await screen.findByRole("button", { name: "alpha:latest" }),
+    ).toBeTruthy();
+  });
+
+  it("shows unavailable fields when the response omits details", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_models"
+            ? ["alpha:latest"]
+            : {},
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "alpha:latest" }),
+    );
+    expect(await screen.findByText("Model details unavailable"));
+  });
+
+  it("shows a detail error and allows retry", async () => {
+    let fail = true;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_models") return Promise.resolve(["alpha:latest"]);
+      return fail
+        ? Promise.reject("unavailable")
+        : Promise.resolve({ format: "gguf" });
+    });
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "alpha:latest" }),
+    );
+    expect(
+      await screen.findByText("Could not load model details"),
+    ).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry details" }));
+    expect(await screen.findByText("gguf")).toBeTruthy();
+  });
+});
