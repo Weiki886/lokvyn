@@ -1,6 +1,6 @@
 # Lokvyn
 
-Lokvyn is a desktop GUI project initially focused on Ollama. It checks the local Ollama connection and lists installed model names with refresh and retry. Model details and support for other services are not implemented yet.
+Lokvyn is a desktop GUI focused on local Ollama. It checks the connection, lists installed models with refresh and retry, and displays available metadata for a selected model. It does not provide chat or model management, and it does not support other services.
 
 The application connects only to `127.0.0.1:11434` and does not start Ollama. Start Ollama separately to see the connected state. The address is not configurable.
 
@@ -29,7 +29,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
 npm run tauri build
 ```
 
-CI runs these checks on macOS. Bundling and release distribution are not configured yet. See [the architecture draft](docs/architecture.md) for outstanding decisions.
+CI runs these checks on macOS. Bundling and release distribution are not configured yet. See [the architecture draft](docs/architecture.md) for current boundaries and outstanding decisions.
 
 With a local Ollama server running, verify the real connection separately:
 
