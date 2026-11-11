@@ -2,6 +2,13 @@
 
 use std::time::Duration;
 
+#[derive(Debug, PartialEq)]
+struct OllamaModel {
+    name: String,
+    size: Option<u64>,
+    modified_at: Option<String>,
+}
+
 async fn get_json(
     url: &str,
     timeout: Duration,
@@ -86,7 +93,7 @@ async fn check_version(url: &str, timeout: Duration) -> Result<String, &'static 
         .ok_or("unavailable")
 }
 
-async fn fetch_models(url: &str, timeout: Duration) -> Result<Vec<String>, &'static str> {
+async fn fetch_models(url: &str, timeout: Duration) -> Result<Vec<OllamaModel>, &'static str> {
     let value = get_json(url, timeout, 4 * 1024 * 1024).await?;
     value
         .get("models")
@@ -94,20 +101,43 @@ async fn fetch_models(url: &str, timeout: Duration) -> Result<Vec<String>, &'sta
         .ok_or("unavailable")?
         .iter()
         .map(|model| {
-            model
+            let name = model
                 .get("name")
-                .and_then(|name| name.as_str())
+                .and_then(serde_json::Value::as_str)
                 .filter(|name| !name.trim().is_empty() && name.len() <= 512)
                 .map(str::to_owned)
-                .ok_or("unavailable")
+                .ok_or("unavailable")?;
+            let size = model.get("size").and_then(serde_json::Value::as_u64);
+            let modified_at = model
+                .get("modified_at")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty() && value.len() <= 64)
+                .map(str::to_owned);
+            Ok(OllamaModel {
+                name,
+                size,
+                modified_at,
+            })
         })
         .collect()
 }
 
 #[tauri::command]
-async fn ollama_models() -> Result<Vec<String>, String> {
+async fn ollama_models() -> Result<Vec<serde_json::Value>, String> {
     fetch_models("http://127.0.0.1:11434/api/tags", Duration::from_secs(3))
         .await
+        .map(|models| {
+            models
+                .into_iter()
+                .map(|model| {
+                    serde_json::json!({
+                        "name": model.name,
+                        "size": model.size,
+                        "modifiedAt": model.modified_at,
+                    })
+                })
+                .collect()
+        })
         .map_err(str::to_owned)
 }
 
@@ -203,10 +233,41 @@ mod tests {
             let url = server(response, Duration::ZERO);
             let result = tauri::async_runtime::block_on(fetch_models(&url, Duration::from_secs(1)));
             match expected {
-                Some(names) => assert_eq!(result.unwrap(), names),
+                Some(names) => assert_eq!(
+                    result
+                        .unwrap()
+                        .into_iter()
+                        .map(|model| model.name)
+                        .collect::<Vec<_>>(),
+                    names
+                ),
                 None => assert!(result.is_err()),
             }
         }
+    }
+
+    #[test]
+    fn reads_model_metadata_and_omits_invalid_optional_values() {
+        let body = r#"{"models":[{"name":"alpha:latest","size":4294967296,"modified_at":"2025-01-02T03:04:05Z"},{"name":"beta:latest","size":"unknown","modified_at":"not-a-date"},{"name":"gamma:latest"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let url = server(response, Duration::ZERO);
+        let result =
+            tauri::async_runtime::block_on(fetch_models(&url, Duration::from_secs(1))).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].name, "alpha:latest");
+        assert_eq!(result[0].size, Some(4_294_967_296));
+        assert_eq!(
+            result[0].modified_at.as_deref(),
+            Some("2025-01-02T03:04:05Z")
+        );
+        assert_eq!(result[1].size, None);
+        assert_eq!(result[1].modified_at.as_deref(), Some("not-a-date"));
+        assert_eq!(result[2].size, None);
+        assert_eq!(result[2].modified_at, None);
     }
 
     #[test]
@@ -334,8 +395,11 @@ mod tests {
     #[ignore = "requires a running local Ollama server"]
     fn lists_local_ollama_models() {
         let url = "http://127.0.0.1:11434/api/tags";
-        let actual =
-            tauri::async_runtime::block_on(fetch_models(url, Duration::from_secs(3))).unwrap();
+        let actual = tauri::async_runtime::block_on(fetch_models(url, Duration::from_secs(3)))
+            .unwrap()
+            .into_iter()
+            .map(|model| model.name)
+            .collect::<Vec<_>>();
         let response =
             tauri::async_runtime::block_on(get_json(url, Duration::from_secs(3), 4 * 1024 * 1024))
                 .unwrap();
@@ -354,8 +418,10 @@ mod tests {
         let models = tauri::async_runtime::block_on(ollama_models()).unwrap();
         let model_name = models
             .first()
-            .expect("local Ollama has no installed models")
-            .clone();
+            .and_then(|model| model.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .expect("local Ollama has no installed models");
         let details = tauri::async_runtime::block_on(ollama_model_details(model_name)).unwrap();
         assert!(details.as_object().is_some_and(|fields| !fields.is_empty()));
     }
