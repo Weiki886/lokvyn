@@ -109,6 +109,19 @@ button:focus-visible {
   text-align: left;
   overflow-wrap: anywhere;
 }
+.models li button .model-name {
+  display: block;
+  font-weight: 600;
+}
+.model-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 5px;
+  color: #596762;
+  font-size: 13px;
+  line-height: 1.4;
+}
 .models li button:hover {
   color: #286745;
 }

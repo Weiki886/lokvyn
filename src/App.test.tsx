@@ -10,6 +10,11 @@ import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const ollamaModel = (name: string) => ({
+  name,
+  size: null,
+  modifiedAt: null,
+});
 beforeEach(() => {
   vi.mocked(invoke).mockImplementation((command) =>
     Promise.resolve(command === "ollama_connection" ? "0.1.0" : []),
@@ -57,16 +62,54 @@ describe("installed models", () => {
   });
 
   it("loads and refreshes the list", async () => {
-    let models = ["alpha:latest"];
+    let models: {
+      name: string;
+      size: number | null;
+      modifiedAt: string | null;
+    }[] = [
+      {
+        name: "alpha:latest",
+        size: 4_294_967_296,
+        modifiedAt: "2025-01-02T03:04:05Z",
+      },
+    ];
     vi.mocked(invoke).mockImplementation((command) =>
       Promise.resolve(command === "ollama_connection" ? "0.1.0" : models),
     );
     render(<App />);
-    expect(await screen.findByText("alpha:latest")).toBeTruthy();
-    models = ["beta:latest"];
+    expect(
+      await screen.findByRole("button", { name: /alpha:latest/ }),
+    ).toBeTruthy();
+    expect(screen.getByText("4 GiB")).toBeTruthy();
+    expect(
+      screen.getByText(
+        new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date("2025-01-02T03:04:05Z")),
+      ),
+    ).toBeTruthy();
+    models = [{ name: "beta:latest", size: null, modifiedAt: null }];
     fireEvent.click(screen.getByRole("button", { name: "Refresh models" }));
-    expect(await screen.findByText("beta:latest")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: /beta:latest/ }),
+    ).toBeTruthy();
     expect(screen.queryByText("alpha:latest")).toBeNull();
+  });
+
+  it("keeps models visible when optional metadata is missing or invalid", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : [{ name: "alpha:latest", size: null, modifiedAt: "invalid" }],
+      ),
+    );
+    render(<App />);
+    expect(
+      await screen.findByRole("button", { name: /alpha:latest/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/GiB|MiB|KiB|bytes/)).toBeNull();
   });
 
   it("shows an empty list", async () => {
@@ -78,7 +121,9 @@ describe("installed models", () => {
     let fail = true;
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "ollama_connection") return Promise.resolve("0.1.0");
-      return fail ? Promise.reject("error") : Promise.resolve(["model:latest"]);
+      return fail
+        ? Promise.reject("error")
+        : Promise.resolve([ollamaModel("model:latest")]);
     });
     render(<App />);
     expect(await screen.findByText("Could not load models")).toBeTruthy();
@@ -93,7 +138,10 @@ describe("model details", () => {
     vi.mocked(invoke).mockImplementation((command, args) => {
       if (command === "ollama_connection") return Promise.resolve("0.1.0");
       if (command === "ollama_models")
-        return Promise.resolve(["alpha:latest", "beta:latest"]);
+        return Promise.resolve([
+          ollamaModel("alpha:latest"),
+          ollamaModel("beta:latest"),
+        ]);
       const modelName = (args as { modelName: string }).modelName;
       return Promise.resolve({
         format: "gguf",
@@ -122,7 +170,7 @@ describe("model details", () => {
         command === "ollama_connection"
           ? "0.1.0"
           : command === "ollama_models"
-            ? ["alpha:latest"]
+            ? [ollamaModel("alpha:latest")]
             : {},
       ),
     );
@@ -137,7 +185,8 @@ describe("model details", () => {
     let fail = true;
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "ollama_connection") return Promise.resolve("0.1.0");
-      if (command === "ollama_models") return Promise.resolve(["alpha:latest"]);
+      if (command === "ollama_models")
+        return Promise.resolve([ollamaModel("alpha:latest")]);
       return fail
         ? Promise.reject("unavailable")
         : Promise.resolve({ format: "gguf" });

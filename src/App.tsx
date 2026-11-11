@@ -7,8 +7,13 @@ type Connection =
   | { state: "unavailable" };
 type Models =
   | { state: "loading" }
-  | { state: "loaded"; names: string[] }
+  | { state: "loaded"; models: OllamaModel[] }
   | { state: "error" };
+type OllamaModel = {
+  name: string;
+  size: number | null;
+  modifiedAt: string | null;
+};
 type ModelDetails = {
   format: string | null;
   family: string | null;
@@ -19,6 +24,29 @@ type Details =
   | { state: "loading" }
   | { state: "loaded"; value: ModelDetails }
   | { state: "error" };
+
+function formatSize(size: number | null) {
+  if (size === null || !Number.isFinite(size) || size < 0) return null;
+  if (size < 1024) return `${size} bytes`;
+  const units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+  let value = size;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit += 1;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)} ${units[unit]}`;
+}
+
+function formatModifiedAt(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
 
 export default function App() {
   const [connection, setConnection] = useState<Connection>({
@@ -49,9 +77,9 @@ export default function App() {
   useEffect(() => {
     if (connection.state !== "connected") return;
     let active = true;
-    invoke<string[]>("ollama_models").then(
-      (names) => {
-        if (active) setModels({ state: "loaded", names });
+    invoke<OllamaModel[]>("ollama_models").then(
+      (models) => {
+        if (active) setModels({ state: "loaded", models });
       },
       () => {
         if (active) setModels({ state: "error" });
@@ -141,7 +169,7 @@ export default function App() {
             <div role="status" aria-live="polite">
               {models.state === "loading" && <p>Loading models...</p>}
               {models.state === "error" && <p>Could not load models</p>}
-              {models.state === "loaded" && models.names.length === 0 && (
+              {models.state === "loaded" && models.models.length === 0 && (
                 <p>No models installed</p>
               )}
             </div>
@@ -150,15 +178,29 @@ export default function App() {
                 Retry models
               </button>
             )}
-            {models.state === "loaded" && models.names.length > 0 && (
+            {models.state === "loaded" && models.models.length > 0 && (
               <ul>
-                {models.names.map((name, index) => (
-                  <li key={`${name}-${index}`}>
-                    <button type="button" onClick={() => openModel(name)}>
-                      {name}
-                    </button>
-                  </li>
-                ))}
+                {models.models.map((model) => {
+                  const size = formatSize(model.size);
+                  const modifiedAt = formatModifiedAt(model.modifiedAt);
+                  return (
+                    <li key={model.name}>
+                      <button
+                        type="button"
+                        aria-label={model.name}
+                        onClick={() => openModel(model.name)}
+                      >
+                        <span className="model-name">{model.name}</span>
+                        {(size || modifiedAt) && (
+                          <span className="model-metadata">
+                            {size && <span>{size}</span>}
+                            {modifiedAt && <span>{modifiedAt}</span>}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
