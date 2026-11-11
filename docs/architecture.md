@@ -1,6 +1,6 @@
 # Lokvyn Architecture Draft
 
-**Status: Draft for review.** This document describes the current implementation and proposes boundaries for the Ollama-focused desktop client. It does not finalize the product scope in [Issue #1](https://github.com/Weiki886/lokvyn/issues/1), nor does it claim that unresolved decisions have been accepted.
+**Status: Proposed MVP decision for review.** This document records the current implementation and the selected initial product boundary for review in [Issue #1](https://github.com/Weiki886/lokvyn/issues/1). The implementation remains Ollama-focused; this decision does not authorize a generic provider framework.
 
 ## Product Boundary
 
@@ -8,7 +8,7 @@ The current application can detect a local Ollama service, list installed models
 
 The application currently targets `127.0.0.1:11434`. It does not start Ollama, manage model files, provide chat, or persist conversations or settings. Whether chat, model downloads or deletion, history, or a configurable service address belong in the first release remains open in Issue #1. Other model services are future possibilities only; a generic provider framework is not part of the current implementation.
 
-macOS is the documented development and CI environment. Windows, Linux, release packaging, signing, and distribution have not been confirmed or validated.
+The MVP target is macOS, matching the documented development and CI environment. Windows and Linux are not MVP targets. The MVP is a developer-run desktop application; installers, signing, and public distribution are deferred until there is a concrete release requirement.
 
 ## Technology Decisions
 
@@ -19,7 +19,7 @@ macOS is the documented development and CI environment. Windows, Linux, release 
 | Persistence | None | Current views read live Ollama responses and do not require a local database. Revisit only if an accepted feature needs durable state. |
 | Build and checks | npm, Vite, TypeScript, Vitest, Cargo | Lockfiles and macOS CI are in place; the documented commands are listed in the README. |
 
-These are the choices reflected by the merged implementation. A future design change still requires review against the product requirements and target platforms.
+These are the choices reflected by the merged implementation and the selected MVP boundary. Changes to product scope or target platforms require a separate review.
 
 ## Current Responsibilities and Data Flow
 
@@ -50,14 +50,21 @@ The Rust client disables proxy use and redirects, uses a three-second request ti
 - Treat frontend unit tests, Rust tests, Tauri builds, native-window checks, and real-service checks as separate evidence. A successful web build does not prove that native IPC or a packaged application works.
 - CI currently runs the repository checks and a Tauri build on macOS. It does not establish support for other operating systems or distribution formats.
 
-## Open Decisions
+## MVP Decisions
 
-The following decisions remain open and must be resolved through product or architecture review before the related scope is treated as committed:
+The initial MVP is a read-only desktop browser for models already available from a local Ollama instance:
 
-- **First-release scope (Issue #1):** whether to include chat, model download or deletion, conversation history, or a configurable Ollama address.
-- **Supported platforms and distribution (Issue #1):** whether Windows or Linux are targets, and whether installers, signing, or release distribution are required.
-- **Network boundary:** whether the fixed local-only connection remains the permanent product boundary. Remote Ollama access would change the privacy and security assumptions and is not implied by future provider extensibility.
-- **Future service integrations (Issue #2):** no generic adapter, provider registry, plugin system, or non-Ollama service is implemented. Reassess the extension boundary when a concrete second-service requirement exists.
-- **Native UI acceptance:** automated browser tests do not exercise Tauri IPC or verify the native window. The desktop workflow and real-service integration still need explicit acceptance on a confirmed target environment.
+- **Included:** connection status and retry; installed-model listing and refresh; navigation to read-only model metadata; loading, empty, and failure feedback.
+- **Excluded:** chat, model download or deletion, conversation history, settings persistence, configurable or remote Ollama addresses, other model services, and a generic provider framework.
+- **Target:** macOS for MVP development and validation. This is not a claim of Windows or Linux support.
+- **Distribution:** run from the documented development workflow. Installers, code signing, and public distribution are deferred.
+- **Storage:** no database. Current views use live service responses and transient UI state.
+- **Network boundary:** Rust makes bounded requests to `127.0.0.1:11434`; do not add remote targets or address overrides without a new product and security review.
 
-Issue #2 should remain open until the architecture is reviewed against the decisions in Issue #1 and its acceptance criteria are explicitly confirmed.
+## Remaining Validation
+
+- Automated browser tests do not exercise Tauri IPC or verify the native window. The desktop workflow must be manually accepted on macOS.
+- Real-service integration tests require a running local Ollama instance and must be recorded separately from CI and unit-test results.
+- Revisit the deferred scope only when a concrete requirement is raised; future service integrations must be designed from that requirement rather than anticipated in the current code.
+
+Issues #1 and #2 can be closed when this MVP boundary and the architecture are accepted through review. Remaining validation items do not expand the product scope.
