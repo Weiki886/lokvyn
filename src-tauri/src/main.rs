@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 #[derive(Debug, PartialEq)]
 struct OllamaModel {
@@ -61,6 +61,17 @@ struct ModelDetails {
     family: Option<String>,
     parameter_size: Option<String>,
     quantization_level: Option<String>,
+    parameters: Option<String>,
+    template: Option<String>,
+    system: Option<String>,
+    model_info: BTreeMap<String, String>,
+}
+
+#[derive(Debug, PartialEq)]
+struct RunningModel {
+    name: String,
+    size_vram: Option<u64>,
+    expires_at: Option<String>,
 }
 
 fn parse_model_details(value: &serde_json::Value) -> Result<ModelDetails, &'static str> {
@@ -75,12 +86,95 @@ fn parse_model_details(value: &serde_json::Value) -> Result<ModelDetails, &'stat
             .filter(|value| !value.trim().is_empty() && value.len() <= 128)
             .map(str::to_owned)
     };
+    let config_field = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty() && value.len() <= 64 * 1024)
+            .map(str::to_owned)
+    };
+    let model_info = value
+        .get("model_info")
+        .and_then(serde_json::Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    if key.is_empty() || key.len() > 128 {
+                        return None;
+                    }
+                    let value = match value {
+                        serde_json::Value::String(value) if value.len() <= 128 => value.clone(),
+                        serde_json::Value::Number(value) => value.to_string(),
+                        serde_json::Value::Bool(value) => value.to_string(),
+                        _ => return None,
+                    };
+                    Some((key.clone(), value))
+                })
+                .take(64)
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(ModelDetails {
         format: field("format"),
         family: field("family"),
         parameter_size: field("parameter_size"),
         quantization_level: field("quantization_level"),
+        parameters: config_field("parameters"),
+        template: config_field("template"),
+        system: config_field("system"),
+        model_info,
     })
+}
+
+fn parse_running_models(value: &serde_json::Value) -> Result<Vec<RunningModel>, &'static str> {
+    value
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("unavailable")?
+        .iter()
+        .map(|model| {
+            let name = model
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| !name.trim().is_empty() && name.len() <= 512)
+                .map(str::to_owned)
+                .ok_or("unavailable")?;
+            let expires_at = model
+                .get("expires_at")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty() && value.len() <= 64)
+                .map(str::to_owned);
+            Ok(RunningModel {
+                name,
+                size_vram: model.get("size_vram").and_then(serde_json::Value::as_u64),
+                expires_at,
+            })
+        })
+        .collect()
+}
+
+async fn set_model_loaded(
+    url: &str,
+    model_name: &str,
+    loaded: bool,
+    timeout: Duration,
+) -> Result<(), &'static str> {
+    let mut body = serde_json::json!({ "model": model_name, "messages": [], "stream": false });
+    if !loaded {
+        body["keep_alive"] = serde_json::json!(0);
+    }
+    let response = request_json(url, reqwest::Method::POST, Some(body), timeout, 64 * 1024).await?;
+    let expected_reason = if loaded { "load" } else { "unload" };
+    if response.get("done").and_then(serde_json::Value::as_bool) != Some(true)
+        || response
+            .get("done_reason")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected_reason)
+    {
+        return Err("unavailable");
+    }
+    Ok(())
 }
 
 async fn check_version(url: &str, timeout: Duration) -> Result<String, &'static str> {
@@ -159,7 +253,60 @@ async fn ollama_model_details(model_name: String) -> Result<serde_json::Value, S
         "family": details.family,
         "parameter_size": details.parameter_size,
         "quantization_level": details.quantization_level,
+        "parameters": details.parameters,
+        "template": details.template,
+        "system": details.system,
+        "model_info": details.model_info,
     }))
+}
+
+#[tauri::command]
+async fn ollama_running_models() -> Result<Vec<serde_json::Value>, String> {
+    let response = get_json(
+        "http://127.0.0.1:11434/api/ps",
+        Duration::from_secs(3),
+        1024 * 1024,
+    )
+    .await
+    .map_err(str::to_owned)?;
+    parse_running_models(&response)
+        .map(|models| {
+            models
+                .into_iter()
+                .map(|model| {
+                    serde_json::json!({
+                        "name": model.name,
+                        "sizeVram": model.size_vram,
+                        "expiresAt": model.expires_at,
+                    })
+                })
+                .collect()
+        })
+        .map_err(str::to_owned)
+}
+
+async fn change_model_state(model_name: String, loaded: bool) -> Result<(), String> {
+    if model_name.trim().is_empty() || model_name.len() > 512 {
+        return Err("unavailable".to_owned());
+    }
+    set_model_loaded(
+        "http://127.0.0.1:11434/api/chat",
+        &model_name,
+        loaded,
+        Duration::from_secs(10 * 60),
+    )
+    .await
+    .map_err(str::to_owned)
+}
+
+#[tauri::command]
+async fn ollama_load_model(model_name: String) -> Result<(), String> {
+    change_model_state(model_name, true).await
+}
+
+#[tauri::command]
+async fn ollama_unload_model(model_name: String) -> Result<(), String> {
+    change_model_state(model_name, false).await
 }
 
 #[tauri::command]
@@ -271,6 +418,95 @@ mod tests {
     }
 
     #[test]
+    fn parses_running_models_and_rejects_invalid_names() {
+        let parsed = parse_running_models(&serde_json::json!({
+            "models": [{
+                "name": "alpha:latest",
+                "size_vram": 4096,
+                "expires_at": "2026-11-12T12:00:00Z"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "alpha:latest");
+        assert_eq!(parsed[0].size_vram, Some(4096));
+        assert_eq!(
+            parsed[0].expires_at.as_deref(),
+            Some("2026-11-12T12:00:00Z")
+        );
+        assert!(parse_running_models(&serde_json::json!({ "models": [{}] })).is_err());
+        assert!(parse_running_models(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn parses_available_read_only_model_configuration() {
+        let parsed = parse_model_details(&serde_json::json!({
+            "details": { "format": "gguf", "family": "llama" },
+            "parameters": "temperature 0.7",
+            "template": "{{ .Prompt }}",
+            "system": "Be concise.",
+            "model_info": {
+                "general.architecture": "llama",
+                "general.parameter_count": 8000000000_i64,
+                "ignored.nested": { "unsafe": true }
+            }
+        }))
+        .unwrap();
+        assert_eq!(parsed.parameters.as_deref(), Some("temperature 0.7"));
+        assert_eq!(parsed.template.as_deref(), Some("{{ .Prompt }}"));
+        assert_eq!(parsed.system.as_deref(), Some("Be concise."));
+        assert_eq!(
+            parsed.model_info.get("general.architecture").unwrap(),
+            "llama"
+        );
+        assert_eq!(
+            parsed.model_info.get("general.parameter_count").unwrap(),
+            "8000000000"
+        );
+        assert!(!parsed.model_info.contains_key("ignored.nested"));
+        assert!(parse_model_details(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn sends_documented_load_and_unload_requests() {
+        for (loaded, expected_reason, body_fragment) in [
+            (true, "load", r#""messages":[]"#),
+            (false, "unload", r#""keep_alive":0"#),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 4096];
+                let size = stream.read(&mut request).unwrap();
+                sender
+                    .send(String::from_utf8_lossy(&request[..size]).into_owned())
+                    .unwrap();
+                let body = format!(r#"{{"done":true,"done_reason":"{expected_reason}"}}"#);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            assert!(tauri::async_runtime::block_on(set_model_loaded(
+                &format!("http://{address}/api/chat"),
+                "alpha:latest",
+                loaded,
+                Duration::from_secs(1),
+            ))
+            .is_ok());
+            let request = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(request.starts_with("POST /api/chat HTTP/1.1\r\n"));
+            assert!(request.contains(r#""model":"alpha:latest""#));
+            assert!(request.contains(body_fragment));
+            assert!(request.contains(r#""stream":false"#));
+        }
+    }
+
+    #[test]
     fn parses_available_model_details_and_omits_missing_fields() {
         let complete = serde_json::json!({
             "details": {
@@ -287,6 +523,10 @@ mod tests {
                 family: Some("llama".into()),
                 parameter_size: Some("8B".into()),
                 quantization_level: Some("Q4_K_M".into()),
+                parameters: None,
+                template: None,
+                system: None,
+                model_info: BTreeMap::new(),
             }
         );
 
@@ -298,6 +538,10 @@ mod tests {
                 family: None,
                 parameter_size: None,
                 quantization_level: None,
+                parameters: None,
+                template: None,
+                system: None,
+                model_info: BTreeMap::new(),
             }
         );
         assert!(parse_model_details(&serde_json::json!({})).is_err());
@@ -413,6 +657,18 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running local Ollama server"]
+    fn lists_running_local_ollama_models() {
+        let response = tauri::async_runtime::block_on(get_json(
+            "http://127.0.0.1:11434/api/ps",
+            Duration::from_secs(3),
+            1024 * 1024,
+        ))
+        .unwrap();
+        assert!(parse_running_models(&response).is_ok());
+    }
+
+    #[test]
     #[ignore = "requires a running local Ollama server with an installed model"]
     fn reads_details_for_a_local_ollama_model() {
         let models = tauri::async_runtime::block_on(ollama_models()).unwrap();
@@ -432,7 +688,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ollama_connection,
             ollama_models,
-            ollama_model_details
+            ollama_model_details,
+            ollama_running_models,
+            ollama_load_model,
+            ollama_unload_model
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Lokvyn");

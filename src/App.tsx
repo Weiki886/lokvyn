@@ -14,11 +14,24 @@ type OllamaModel = {
   size: number | null;
   modifiedAt: string | null;
 };
+type RunningModel = {
+  name: string;
+  sizeVram: number | null;
+  expiresAt: string | null;
+};
+type RunningModels =
+  | { state: "loading" }
+  | { state: "loaded"; models: RunningModel[] }
+  | { state: "error" };
 type ModelDetails = {
   format: string | null;
   family: string | null;
   parameter_size: string | null;
   quantization_level: string | null;
+  parameters: string | null;
+  template: string | null;
+  system: string | null;
+  model_info: Record<string, string>;
 };
 type Details =
   | { state: "loading" }
@@ -48,6 +61,15 @@ function formatModifiedAt(value: string | null) {
   }).format(date);
 }
 
+function hasModelConfiguration(details: ModelDetails) {
+  return Boolean(
+    details.parameters ||
+    details.template ||
+    details.system ||
+    Object.keys(details.model_info ?? {}).length > 0,
+  );
+}
+
 export default function App() {
   const [connection, setConnection] = useState<Connection>({
     state: "connecting",
@@ -55,6 +77,15 @@ export default function App() {
   const [attempt, setAttempt] = useState(0);
   const [models, setModels] = useState<Models>({ state: "loading" });
   const [refresh, setRefresh] = useState(0);
+  const [runningModels, setRunningModels] = useState<RunningModels>({
+    state: "loading",
+  });
+  const [runningRefresh, setRunningRefresh] = useState(0);
+  const [modelAction, setModelAction] = useState<{
+    name: string;
+    action: "loading" | "unloading";
+  } | null>(null);
+  const [actionError, setActionError] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [details, setDetails] = useState<Details>({ state: "loading" });
   const [detailsAttempt, setDetailsAttempt] = useState(0);
@@ -91,6 +122,22 @@ export default function App() {
   }, [connection, refresh]);
 
   useEffect(() => {
+    if (connection.state !== "connected") return;
+    let active = true;
+    invoke<RunningModel[]>("ollama_running_models").then(
+      (models) => {
+        if (active) setRunningModels({ state: "loaded", models });
+      },
+      () => {
+        if (active) setRunningModels({ state: "error" });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [connection, runningRefresh]);
+
+  useEffect(() => {
     if (!selectedModel) return;
     let active = true;
     invoke<ModelDetails>("ollama_model_details", {
@@ -111,6 +158,39 @@ export default function App() {
   function refreshModels() {
     setModels({ state: "loading" });
     setRefresh((n) => n + 1);
+  }
+
+  function refreshRunningModels() {
+    setRunningModels({ state: "loading" });
+    setActionError(false);
+    setRunningRefresh((n) => n + 1);
+  }
+
+  async function changeModelState(name: string, loaded: boolean) {
+    setModelAction({ name, action: loaded ? "loading" : "unloading" });
+    setActionError(false);
+    try {
+      await invoke(loaded ? "ollama_load_model" : "ollama_unload_model", {
+        modelName: name,
+      });
+    } catch {
+      // The request outcome can be uncertain; the runtime query decides the state.
+    }
+    try {
+      const currentModels = await invoke<RunningModel[]>(
+        "ollama_running_models",
+      );
+      setRunningModels({ state: "loaded", models: currentModels });
+      setActionError(
+        currentModels.some((runningModel) => runningModel.name === name) !==
+          loaded,
+      );
+    } catch {
+      setRunningModels({ state: "error" });
+      setActionError(true);
+    } finally {
+      setModelAction(null);
+    }
   }
 
   function openModel(name: string) {
@@ -160,10 +240,35 @@ export default function App() {
           <div className="models" aria-labelledby="models-title">
             <div className="models-heading">
               <h2 id="models-title">Installed models</h2>
-              {models.state === "loaded" && (
-                <button type="button" onClick={refreshModels}>
-                  Refresh models
-                </button>
+              <div className="model-actions">
+                {models.state === "loaded" && (
+                  <button type="button" onClick={refreshModels}>
+                    Refresh models
+                  </button>
+                )}
+                {runningModels.state !== "loading" && (
+                  <button
+                    type="button"
+                    disabled={modelAction !== null}
+                    onClick={refreshRunningModels}
+                  >
+                    Refresh running status
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="runtime-status" role="status" aria-live="polite">
+              {runningModels.state === "loading" && (
+                <p>Checking loaded models...</p>
+              )}
+              {runningModels.state === "error" && (
+                <p className="unavailable">Could not check loaded models</p>
+              )}
+              {actionError && (
+                <p className="unavailable">
+                  Model state could not be confirmed. Refresh status before
+                  retrying.
+                </p>
               )}
             </div>
             <div role="status" aria-live="polite">
@@ -183,21 +288,60 @@ export default function App() {
                 {models.models.map((model) => {
                   const size = formatSize(model.size);
                   const modifiedAt = formatModifiedAt(model.modifiedAt);
+                  const running =
+                    runningModels.state === "loaded"
+                      ? runningModels.models.find(
+                          (runningModel) => runningModel.name === model.name,
+                        )
+                      : undefined;
+                  const busy = modelAction?.name === model.name;
+                  const actionDisabled =
+                    runningModels.state !== "loaded" || modelAction !== null;
                   return (
                     <li key={model.name}>
-                      <button
-                        type="button"
-                        aria-label={model.name}
-                        onClick={() => openModel(model.name)}
-                      >
-                        <span className="model-name">{model.name}</span>
-                        {(size || modifiedAt) && (
-                          <span className="model-metadata">
-                            {size && <span>{size}</span>}
-                            {modifiedAt && <span>{modifiedAt}</span>}
-                          </span>
-                        )}
-                      </button>
+                      <div className="model-row">
+                        <button
+                          className="model-select"
+                          type="button"
+                          aria-label={model.name}
+                          onClick={() => openModel(model.name)}
+                        >
+                          <span className="model-name">{model.name}</span>
+                          {(size || modifiedAt || running) && (
+                            <span className="model-metadata">
+                              {size && <span>{size}</span>}
+                              {modifiedAt && <span>{modifiedAt}</span>}
+                              {running && (
+                                <span className="loaded-label">Loaded</span>
+                              )}
+                              {running?.sizeVram !== null &&
+                                running?.sizeVram !== undefined && (
+                                  <span>
+                                    {formatSize(running.sizeVram)} VRAM
+                                  </span>
+                                )}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionDisabled}
+                          aria-label={
+                            busy
+                              ? `${modelAction.action === "loading" ? "Loading" : "Unloading"} ${model.name}`
+                              : `${running ? "Unload" : "Load"} ${model.name}`
+                          }
+                          onClick={() => changeModelState(model.name, !running)}
+                        >
+                          {busy
+                            ? modelAction.action === "loading"
+                              ? "Loading..."
+                              : "Unloading..."
+                            : running
+                              ? "Unload"
+                              : "Load"}
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -217,9 +361,16 @@ export default function App() {
               {details.state === "loading" && <p>Loading model details...</p>}
               {details.state === "error" && <p>Could not load model details</p>}
               {details.state === "loaded" &&
-                !Object.values(details.value).some(Boolean) && (
-                  <p>Model details unavailable</p>
-                )}
+                ![
+                  details.value.format,
+                  details.value.family,
+                  details.value.parameter_size,
+                  details.value.quantization_level,
+                  details.value.parameters,
+                  details.value.template,
+                  details.value.system,
+                  Object.keys(details.value.model_info ?? {}).length > 0,
+                ].some(Boolean) && <p>Model details unavailable</p>}
             </div>
             {details.state === "error" && (
               <button type="button" onClick={retryDetails}>
@@ -227,7 +378,12 @@ export default function App() {
               </button>
             )}
             {details.state === "loaded" &&
-              Object.values(details.value).some(Boolean) && (
+              [
+                details.value.format,
+                details.value.family,
+                details.value.parameter_size,
+                details.value.quantization_level,
+              ].some(Boolean) && (
                 <dl className="detail-list">
                   {[
                     ["Format", details.value.format],
@@ -244,6 +400,39 @@ export default function App() {
                       ),
                   )}
                 </dl>
+              )}
+            {details.state === "loaded" &&
+              hasModelConfiguration(details.value) && (
+                <div className="configuration-list">
+                  {[
+                    ["Model parameters", details.value.parameters],
+                    ["Prompt template", details.value.template],
+                    ["System prompt", details.value.system],
+                  ].map(
+                    ([label, value]) =>
+                      value && (
+                        <details key={label}>
+                          <summary>{label}</summary>
+                          <pre>{value}</pre>
+                        </details>
+                      ),
+                  )}
+                  {Object.keys(details.value.model_info ?? {}).length > 0 && (
+                    <details>
+                      <summary>Model information</summary>
+                      <dl className="model-info-list">
+                        {Object.entries(details.value.model_info ?? {}).map(
+                          ([key, value]) => (
+                            <div key={key}>
+                              <dt>{key}</dt>
+                              <dd>{value}</dd>
+                            </div>
+                          ),
+                        )}
+                      </dl>
+                    </details>
+                  )}
+                </div>
               )}
           </div>
         )}

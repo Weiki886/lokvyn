@@ -85,6 +85,13 @@ button:focus-visible {
   gap: 12px;
   flex-wrap: wrap;
 }
+.model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .models h2 {
   font-size: 18px;
   margin: 0;
@@ -99,7 +106,15 @@ button:focus-visible {
   border-bottom: 1px solid #d3ded8;
   overflow-wrap: anywhere;
 }
-.models li button {
+.model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.models li .model-select {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   border: 0;
   border-radius: 0;
@@ -108,6 +123,15 @@ button:focus-visible {
   padding: 14px 0;
   text-align: left;
   overflow-wrap: anywhere;
+}
+.models li .model-select:disabled {
+  cursor: wait;
+}
+.models li .model-select:hover {
+  color: #286745;
+}
+.model-row > button:last-child {
+  flex: 0 0 auto;
 }
 .models li button .model-name {
   display: block;
@@ -122,8 +146,17 @@ button:focus-visible {
   font-size: 13px;
   line-height: 1.4;
 }
-.models li button:hover {
+.loaded-label {
   color: #286745;
+  font-weight: 700;
+}
+.runtime-status p {
+  color: #596762;
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+.runtime-status .unavailable {
+  color: #a23b31;
 }
 .detail-list {
   margin: 16px 0 0;
@@ -143,6 +176,55 @@ button:focus-visible {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.configuration-list {
+  margin-top: 20px;
+  border-top: 1px solid #d3ded8;
+}
+.configuration-list details {
+  border-bottom: 1px solid #d3ded8;
+  padding: 14px 0;
+}
+.configuration-list summary {
+  color: #234c3c;
+  cursor: pointer;
+  font-weight: 600;
+}
+.configuration-list pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 12px 0 0;
+  padding: 12px;
+  background: #e9eeea;
+  border-radius: 4px;
+  color: #202b2a;
+  font:
+    12px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.model-info-list {
+  margin: 12px 0 0;
+}
+.model-info-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #d3ded8;
+}
+.model-info-list dt,
+.model-info-list dd {
+  overflow-wrap: anywhere;
+}
+.model-info-list dt {
+  color: #596762;
+}
+.model-info-list dd {
+  margin: 0;
+}
 footer {
   color: #687772;
   font-size: 12px;
@@ -153,5 +235,22 @@ footer {
   }
   h1 {
     font-size: 36px;
+  }
+  .model-row {
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .model-row > button:last-child {
+    padding: 8px 10px;
+  }
+  .models-heading {
+    align-items: flex-start;
+  }
+  .model-actions {
+    justify-content: flex-start;
+  }
+  .detail-list > div {
+    grid-template-columns: minmax(90px, 1fr) 2fr;
+    gap: 10px;
   }
 }
