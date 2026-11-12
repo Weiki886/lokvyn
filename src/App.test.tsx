@@ -403,3 +403,100 @@ describe("model details", () => {
     expect(await screen.findByText("gguf")).toBeTruthy();
   });
 });
+
+describe("desktop workspace", () => {
+  it("navigates every workspace without pretending deferred services are active", async () => {
+    render(<App />);
+    await screen.findByText("Connected");
+    for (const name of [
+      "Discover",
+      "Running models",
+      "Downloads",
+      "Chat",
+      "API access",
+      "Settings",
+      "Installed models",
+    ]) {
+      fireEvent.click(
+        screen.getByRole("button", { name: `Navigate to ${name}` }),
+      );
+      expect(screen.getByRole("heading", { name, level: 1 })).toBeTruthy();
+    }
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.every(([name]) =>
+          [
+            "ollama_connection",
+            "ollama_models",
+            "ollama_running_models",
+          ].includes(name),
+        ),
+    ).toBe(true);
+  });
+
+  it("searches installed models and keeps the list visible beside the inspector", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_models"
+            ? [ollamaModel("alpha:latest"), ollamaModel("beta:latest")]
+            : command === "ollama_model_details"
+              ? { format: "gguf" }
+              : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "alpha:latest" }),
+    );
+    expect(await screen.findByText("gguf")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "beta:latest" })).toBeTruthy();
+    for (const name of ["Rename model", "Duplicate model", "Delete model"]) {
+      expect(
+        screen.getByRole("button", { name }).hasAttribute("disabled"),
+      ).toBe(true);
+    }
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search installed models" }),
+      { target: { value: "BETA" } },
+    );
+    expect(screen.queryByRole("button", { name: "alpha:latest" })).toBeNull();
+    expect(screen.getByRole("button", { name: "beta:latest" })).toBeTruthy();
+  });
+
+  it("filters the catalog preview and keeps chat and key creation disabled", async () => {
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(screen.getByText("Catalog preview")).toBeTruthy();
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search catalog preview" }),
+      { target: { value: "qwen" } },
+    );
+    expect(screen.getByText("qwen3")).toBeTruthy();
+    expect(screen.queryByText("gemma3")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Capability" }), {
+      target: { value: "Embedding" },
+    });
+    expect(screen.getByText("No matching models")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Send message" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to API access" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Create API key" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByText("Gateway not configured")).toBeTruthy();
+    await screen.findByText("Connected");
+  });
+});
