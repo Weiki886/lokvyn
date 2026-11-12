@@ -482,9 +482,8 @@ describe("desktop workspace", () => {
     );
     expect(screen.getByText("qwen3")).toBeTruthy();
     expect(screen.queryByText("gemma3")).toBeNull();
-    fireEvent.change(screen.getByRole("combobox", { name: "Capability" }), {
-      target: { value: "Embedding" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Capability" }));
+    fireEvent.click(screen.getByRole("option", { name: "Embedding" }));
     expect(screen.getByText("No matching models")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
     expect(
@@ -510,9 +509,8 @@ describe("language and application version settings", () => {
     const { unmount } = render(<App />);
     await screen.findByText("Connected");
     fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Language" }), {
-      target: { value: "zh-CN" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Language" }));
+    fireEvent.click(screen.getByRole("option", { name: "简体中文" }));
 
     expect(
       screen.getByRole("heading", { name: "设置", level: 1 }),
@@ -545,9 +543,8 @@ describe("language and application version settings", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "导航到设置" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "导航到设置" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
-      target: { value: "en" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "语言" }));
+    fireEvent.click(screen.getByRole("option", { name: "English" }));
     expect(
       screen.getByRole("heading", { name: "Settings", level: 1 }),
     ).toBeTruthy();
@@ -601,9 +598,8 @@ describe("language and application version settings", () => {
     localStorage.setItem("lokvyn.locale", "zh-CN");
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "导航到发现模型" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "能力类型" }), {
-      target: { value: "Embedding" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "能力类型" }));
+    fireEvent.click(screen.getByRole("option", { name: "向量嵌入" }));
     expect(screen.getByText("nomic-embed-text")).toBeTruthy();
     expect(screen.queryByText("qwen3")).toBeNull();
     expect(screen.getByText("用于搜索与检索的文本向量。")).toBeTruthy();

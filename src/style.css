@@ -1,17 +1,20 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #202b2a;
-  background: #f3f5f2;
+  background: #fff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --ink: #202b2a;
   --muted: #687772;
   --subtle: #596762;
-  --line: #d3ded8;
+  --line: #dce3df;
   --surface: #fff;
-  --canvas: #f3f5f2;
+  --surface-muted: #f6f8f7;
+  --canvas: #fff;
   --brand: #39735c;
   --brand-dark: #234c3c;
+  --brand-soft: #eaf3ed;
+  --focus-ring: rgb(57 115 92 / 16%);
   --orange: #ae633d;
   --success: #286745;
   --danger: #a23b31;
@@ -47,7 +50,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--orange);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 button:disabled {
@@ -87,8 +90,8 @@ button:disabled {
   place-items: center;
   width: 30px;
   height: 30px;
-  color: var(--brand);
-  background: #e9eeea;
+  color: #fff;
+  background: var(--brand);
   border-radius: 6px;
 }
 .brand-tag {
@@ -142,7 +145,7 @@ button:disabled {
   flex-direction: column;
   min-height: 0;
   padding: 16px 12px 12px;
-  background: #edf1ed;
+  background: var(--surface);
   border-right: 1px solid var(--line);
 }
 .sidebar nav {
@@ -175,17 +178,20 @@ button:disabled {
   font-size: 13px;
 }
 .nav-item:hover {
-  color: var(--ink);
-  background: #f7f9f7;
+  color: var(--brand-dark);
+  background: var(--brand-soft);
 }
 .nav-item.active {
-  color: var(--brand-dark);
-  background: var(--surface);
-  border-color: var(--line);
+  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
   font-weight: 600;
 }
 .nav-item.active > svg {
-  color: var(--brand);
+  color: inherit;
+}
+.nav-item.active small {
+  color: #fff;
 }
 .nav-item > span {
   min-width: 0;
@@ -246,12 +252,12 @@ button:disabled {
   min-height: 78px;
   padding: 13px 22px;
   border-bottom: 1px solid var(--line);
-  background: #f8faf8;
+  background: var(--surface);
 }
 .workspace-heading .eyebrow {
   display: block;
   margin: 0 0 4px;
-  color: var(--orange);
+  color: var(--brand);
   font-size: 9px;
   font-weight: 700;
 }
@@ -262,7 +268,8 @@ h1 {
   font-weight: 650;
 }
 .primary,
-.workspace-content button:not(.model-select):not(.icon-button),
+.workspace-content
+  button:not(.model-select):not(.icon-button):not(.form-select),
 .empty-state button,
 .section-heading button,
 .composer button {
@@ -282,7 +289,9 @@ h1 {
 }
 .primary:hover:not(:disabled),
 .workspace-content
-  button:not(.model-select):not(.icon-button):hover:not(:disabled) {
+  button:not(.model-select):not(.icon-button):not(.form-select):hover:not(
+    :disabled
+  ) {
   background: var(--brand-dark);
 }
 .workspace-body {
@@ -297,6 +306,7 @@ h1 {
 }
 .workspace-content {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -361,7 +371,17 @@ h1 {
   color: var(--muted);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 6px;
+  transition:
+    border-color 120ms,
+    box-shadow 120ms;
+}
+.search-field:hover {
+  border-color: var(--brand);
+}
+.search-field:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .search-field input {
   width: 100%;
@@ -375,6 +395,7 @@ h1 {
 }
 .search-field input:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 .table-caption {
   display: flex;
@@ -407,7 +428,7 @@ h1 {
   gap: 8px;
   padding: 9px 10px;
   color: var(--muted);
-  background: #edf1ed;
+  background: var(--surface-muted);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   font-size: 9px;
@@ -422,7 +443,8 @@ h1 {
   border-bottom: 1px solid var(--line);
 }
 .model-list li.selected {
-  background: #edf3ef;
+  background: var(--brand-soft);
+  box-shadow: inset 3px 0 var(--brand);
 }
 .model-row {
   display: grid;
@@ -507,7 +529,7 @@ h1 {
   min-height: 0;
   padding: 14px 17px;
   overflow: auto;
-  background: #fafbfa;
+  background: var(--surface);
   border-left: 1px solid var(--line);
 }
 .inspector-caption {
@@ -796,15 +818,16 @@ h1 {
   flex: 1;
   max-width: 380px;
 }
-.filter-bar select,
-.section-toolbar select {
-  min-width: 130px;
-  padding: 0 9px;
-  color: var(--ink);
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  font-size: 11px;
+.filter-bar .form-select {
+  flex: 0 1 180px;
+  width: 180px;
+}
+.section-toolbar .form-select {
+  width: min(100%, 280px);
+}
+.section-toolbar > .inline {
+  min-width: 0;
+  flex: 1;
 }
 .discover-view > .quiet-note {
   margin: 10px 0 13px;
@@ -1015,15 +1038,8 @@ h1 {
   color: var(--subtle);
   font-size: 11px;
 }
-.language-setting select {
+.language-setting .form-select {
   width: min(100%, 260px);
-  min-height: 34px;
-  padding: 0 9px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  font-size: 11px;
 }
 .settings-section .section-heading button {
   background: #fff;

@@ -12,6 +12,7 @@ import {
   Server,
 } from "lucide-react";
 import { translate, type Locale } from "./i18n";
+import { Select, TextArea, TextInput } from "./FormControls";
 
 export type View =
   | "Discover"
@@ -80,18 +81,15 @@ function ModelSelector({
 }) {
   const t = (source: string) => translate(locale, source);
   return (
-    <select
-      aria-label={t("Select model")}
+    <Select
+      label={t("Select model")}
       value={model}
-      onChange={(event) => setModel(event.target.value)}
-    >
-      <option value="">{t("Select an installed model")}</option>
-      {models.map((name) => (
-        <option key={name} value={name}>
-          {name}
-        </option>
-      ))}
-    </select>
+      onChange={setModel}
+      options={[
+        { value: "", label: t("Select an installed model") },
+        ...models.map((name) => ({ value: name, label: name })),
+      ]}
+    />
   );
 }
 
@@ -139,7 +137,7 @@ export default function WorkspaceViews({
         <div className="filter-bar">
           <label className="search-field">
             <Search size={16} />
-            <input
+            <TextInput
               type="search"
               aria-label={t("Search catalog preview")}
               placeholder={t("Search model families...")}
@@ -147,19 +145,18 @@ export default function WorkspaceViews({
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <select
-            aria-label={t("Capability")}
+          <Select
+            label={t("Capability")}
             value={capability}
-            onChange={(event) => setCapability(event.target.value)}
-          >
-            {["All capabilities", "Chat", "Vision", "Code", "Embedding"].map(
-              (value) => (
-                <option key={value} value={value}>
-                  {t(value)}
-                </option>
-              ),
-            )}
-          </select>
+            onChange={setCapability}
+            options={[
+              "All capabilities",
+              "Chat",
+              "Vision",
+              "Code",
+              "Embedding",
+            ].map((value) => ({ value, label: t(value) }))}
+          />
         </div>
         <p className="quiet-note">
           {t(
@@ -239,7 +236,7 @@ export default function WorkspaceViews({
           <p>{t("Chat generation is not connected yet.")}</p>
         </div>
         <div className="composer">
-          <textarea
+          <TextArea
             aria-label={t("Message")}
             placeholder={t("Message your local model...")}
             disabled
@@ -380,17 +377,18 @@ export default function WorkspaceViews({
       </div>
       <div className="settings-section language-section">
         <h3>{t("Language")}</h3>
-        <label className="language-setting">
+        <div className="language-setting">
           <span>{t("Language")}</span>
-          <select
-            aria-label={t("Language")}
+          <Select
+            label={t("Language")}
             value={locale}
-            onChange={(event) => setLocale(event.target.value as Locale)}
-          >
-            <option value="en">English</option>
-            <option value="zh-CN">简体中文</option>
-          </select>
-        </label>
+            onChange={(value) => setLocale(value as Locale)}
+            options={[
+              { value: "en", label: "English" },
+              { value: "zh-CN", label: "简体中文" },
+            ]}
+          />
+        </div>
       </div>
     </section>
   );

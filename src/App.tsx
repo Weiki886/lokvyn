@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import WorkspaceViews, { type View } from "./WorkspaceViews";
+import { TextInput } from "./FormControls";
 import { readLocale, saveLocale, translate, type Locale } from "./i18n";
 
 type Connection =
@@ -423,7 +424,7 @@ export default function App() {
                 <div className="models-heading">
                   <label className="search-field">
                     <Search size={16} />
-                    <input
+                    <TextInput
                       type="search"
                       aria-label={t(`Search ${view.toLowerCase()}`)}
                       placeholder={t("Search models...")}
