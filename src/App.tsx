@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import {
   Activity,
@@ -22,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import WorkspaceViews, { type View } from "./WorkspaceViews";
+import { readLocale, saveLocale, translate, type Locale } from "./i18n";
 
 type Connection =
   | { state: "connecting" }
@@ -60,9 +62,9 @@ type Details =
   | { state: "loaded"; value: ModelDetails }
   | { state: "error" };
 
-function formatSize(size: number | null) {
+function formatSize(size: number | null, locale: Locale) {
   if (size === null || !Number.isFinite(size) || size < 0) return null;
-  if (size < 1024) return `${size} bytes`;
+  if (size < 1024) return `${size} ${translate(locale, "bytes")}`;
   const units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
   let value = size;
   let unit = -1;
@@ -70,14 +72,14 @@ function formatSize(size: number | null) {
     value /= 1024;
     unit += 1;
   } while (value >= 1024 && unit < units.length - 1);
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)} ${units[unit]}`;
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value)} ${units[unit]}`;
 }
 
-function formatModifiedAt(value: string | null) {
+function formatModifiedAt(value: string | null, locale: Locale) {
   if (!value) return null;
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
@@ -93,6 +95,9 @@ function hasModelConfiguration(details: ModelDetails) {
 }
 
 export default function App() {
+  const [locale, setLocale] = useState<Locale>(readLocale);
+  const [appVersion, setAppVersion] = useState("");
+  const t = (source: string) => translate(locale, source);
   const [view, setView] = useState<View>("Installed models");
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(false);
@@ -115,6 +120,26 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [details, setDetails] = useState<Details>({ state: "loading" });
   const [detailsAttempt, setDetailsAttempt] = useState(0);
+
+  useEffect(() => {
+    saveLocale(locale);
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  useEffect(() => {
+    let active = true;
+    getVersion().then(
+      (version) => {
+        if (active) setAppVersion(version);
+      },
+      () => {
+        if (active) setAppVersion("");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -274,13 +299,13 @@ export default function App() {
             <Box size={21} />
           </span>
           <strong>Lokvyn</strong>
-          <span className="brand-tag">LOCAL AI</span>
+          <span className="brand-tag">{t("LOCAL AI")}</span>
         </div>
         <div className="topbar-context">
           <button
             className="icon-button"
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={t(collapsed ? "Expand sidebar" : "Collapse sidebar")}
+            title={t(collapsed ? "Expand sidebar" : "Collapse sidebar")}
             onClick={() => setCollapsed(!collapsed)}
           >
             {collapsed ? (
@@ -290,30 +315,33 @@ export default function App() {
             )}
           </button>
           <span className="breadcrumb">
-            Workspace <ChevronRight size={14} />
-            <span>{view}</span>
+            {t("Workspace")} <ChevronRight size={14} />
+            <span>{t(view)}</span>
           </span>
         </div>
         <button
           className="icon-button"
-          aria-label="Open settings"
-          title="Settings"
+          aria-label={t("Open settings")}
+          title={t("Settings")}
           onClick={() => setView("Settings")}
         >
           <Settings size={18} />
         </button>
       </header>
       <aside className="sidebar">
-        <nav aria-label="Main navigation">
+        <nav aria-label={t("Main navigation")}>
           {navGroups.map((group) => (
             <div className="nav-group" key={group.label}>
-              <p className="nav-label">{group.label}</p>
+              <p className="nav-label">{t(group.label)}</p>
               {group.items.map(({ name, icon: Icon }) => (
                 <button
                   key={name}
-                  aria-label={`Navigate to ${name}`}
+                  aria-label={t("Navigate to {view}").replace(
+                    "{view}",
+                    t(name),
+                  )}
                   aria-current={view === name ? "page" : undefined}
-                  title={name}
+                  title={t(name)}
                   className={`nav-item ${view === name ? "active" : ""}`}
                   onClick={() => {
                     setView(name);
@@ -321,7 +349,7 @@ export default function App() {
                   }}
                 >
                   <Icon size={18} />
-                  <span>{name}</span>
+                  <span>{t(name)}</span>
                   {name === "Installed models" && models.state === "loaded" && (
                     <small>{models.models.length}</small>
                   )}
@@ -337,7 +365,7 @@ export default function App() {
         <div className="sidebar-service">
           <Server size={18} />
           <div>
-            <strong>Local Ollama</strong>
+            <strong>{t("Local Ollama")}</strong>
             <span>127.0.0.1:11434</span>
           </div>
           <i
@@ -349,14 +377,14 @@ export default function App() {
         <div className="workspace-heading">
           <div>
             <span className="eyebrow">
-              {isModelView ? "MODEL WORKSPACE" : "LOCAL WORKSPACE"}
+              {t(isModelView ? "MODEL WORKSPACE" : "LOCAL WORKSPACE")}
             </span>
-            <h1 id="title">{view}</h1>
+            <h1 id="title">{t(view)}</h1>
           </div>
           {isModelView && (
             <button className="primary" onClick={() => setView("Discover")}>
               <Compass size={16} />
-              Browse models
+              {t("Browse models")}
             </button>
           )}
         </div>
@@ -370,12 +398,12 @@ export default function App() {
               aria-live="polite"
             >
               {connection.state === "connecting" && (
-                <p>Connecting to Ollama...</p>
+                <p>{t("Connecting to Ollama...")}</p>
               )}
               {connection.state === "unavailable" && (
                 <>
-                  <p className="unavailable">Ollama is unavailable</p>
-                  <p>Check that Ollama is running on this computer.</p>
+                  <p className="unavailable">{t("Ollama is unavailable")}</p>
+                  <p>{t("Check that Ollama is running on this computer.")}</p>
                 </>
               )}
             </div>
@@ -387,7 +415,7 @@ export default function App() {
                   setAttempt((n) => n + 1);
                 }}
               >
-                Retry connection
+                {t("Retry connection")}
               </button>
             )}
             {isModelView && connection.state === "connected" && (
@@ -397,8 +425,8 @@ export default function App() {
                     <Search size={16} />
                     <input
                       type="search"
-                      aria-label={`Search ${view.toLowerCase()}`}
-                      placeholder="Search models..."
+                      aria-label={t(`Search ${view.toLowerCase()}`)}
+                      placeholder={t("Search models...")}
                       value={search}
                       onChange={(event) => setSearch(event.target.value)}
                     />
@@ -407,8 +435,8 @@ export default function App() {
                     {models.state === "loaded" && (
                       <button
                         className="icon-button"
-                        aria-label="Refresh models"
-                        title="Refresh models"
+                        aria-label={t("Refresh models")}
+                        title={t("Refresh models")}
                         type="button"
                         onClick={refreshModels}
                       >
@@ -419,8 +447,8 @@ export default function App() {
                       <button
                         type="button"
                         className="icon-button"
-                        aria-label="Refresh running status"
-                        title="Refresh running status"
+                        aria-label={t("Refresh running status")}
+                        title={t("Refresh running status")}
                         disabled={modelAction !== null}
                         onClick={refreshRunningModels}
                       >
@@ -432,10 +460,12 @@ export default function App() {
                 <div className="table-caption">
                   <h2 id="models-title">
                     {view === "Running models"
-                      ? "In memory"
-                      : "On this computer"}
+                      ? t("In memory")
+                      : t("On this computer")}
                   </h2>
-                  <span>{sourceModels.length} models</span>
+                  <span>
+                    {sourceModels.length} {t("models")}
+                  </span>
                 </div>
                 <div
                   className="runtime-status"
@@ -443,34 +473,39 @@ export default function App() {
                   aria-live="polite"
                 >
                   {runningModels.state === "loading" && (
-                    <p>Checking loaded models...</p>
+                    <p>{t("Checking loaded models...")}</p>
                   )}
                   {runningModels.state === "error" && (
-                    <p className="unavailable">Could not check loaded models</p>
+                    <p className="unavailable">
+                      {t("Could not check loaded models")}
+                    </p>
                   )}
                   {actionError && (
                     <p className="unavailable">
-                      Model state could not be confirmed. Refresh status before
-                      retrying.
+                      {t(
+                        "Model state could not be confirmed. Refresh status before retrying.",
+                      )}
                     </p>
                   )}
                 </div>
                 <div role="status" aria-live="polite">
                   {view === "Installed models" &&
-                    models.state === "loading" && <p>Loading models...</p>}
+                    models.state === "loading" && (
+                      <p>{t("Loading models...")}</p>
+                    )}
                   {view === "Installed models" && models.state === "error" && (
-                    <p>Could not load models</p>
+                    <p>{t("Could not load models")}</p>
                   )}
                   {view === "Installed models" &&
                     models.state === "loaded" &&
                     models.models.length === 0 && (
                       <div className="empty-state">
                         <Box size={40} strokeWidth={1.4} />
-                        <h3>No models installed</h3>
-                        <p>Your downloaded models will appear here.</p>
+                        <h3>{t("No models installed")}</h3>
+                        <p>{t("Your downloaded models will appear here.")}</p>
                         <button onClick={() => setView("Discover")}>
                           <Compass size={16} />
-                          Explore models
+                          {t("Explore models")}
                         </button>
                       </div>
                     )}
@@ -479,34 +514,37 @@ export default function App() {
                     sourceModels.length === 0 && (
                       <div className="empty-state">
                         <Activity size={40} strokeWidth={1.4} />
-                        <h3>No models running</h3>
-                        <p>Load a model from Installed models.</p>
+                        <h3>{t("No models running")}</h3>
+                        <p>{t("Load a model from Installed models.")}</p>
                       </div>
                     )}
                   {sourceModels.length > 0 && visibleModels.length === 0 && (
                     <div className="empty-state">
                       <Search size={30} />
-                      <h3>No matching models</h3>
-                      <p>Try another model name.</p>
+                      <h3>{t("No matching models")}</h3>
+                      <p>{t("Try another model name.")}</p>
                     </div>
                   )}
                 </div>
                 {view === "Installed models" && models.state === "error" && (
                   <button type="button" onClick={refreshModels}>
-                    Retry models
+                    {t("Retry models")}
                   </button>
                 )}
                 {visibleModels.length > 0 && (
                   <>
                     <div className="table-header" aria-hidden="true">
-                      <span>MODEL NAME</span>
-                      <span>SIZE / UPDATED</span>
-                      <span>RUNTIME</span>
+                      <span>{t("Model name")}</span>
+                      <span>{t("Size / Updated")}</span>
+                      <span>{t("Runtime")}</span>
                     </div>
                     <ul className="model-list">
                       {visibleModels.map((model) => {
-                        const size = formatSize(model.size);
-                        const modifiedAt = formatModifiedAt(model.modifiedAt);
+                        const size = formatSize(model.size, locale);
+                        const modifiedAt = formatModifiedAt(
+                          model.modifiedAt,
+                          locale,
+                        );
                         const running =
                           runningModels.state === "loaded"
                             ? runningModels.models.find(
@@ -543,13 +581,14 @@ export default function App() {
                                     {modifiedAt && <span>{modifiedAt}</span>}
                                     {running && (
                                       <span className="loaded-label">
-                                        Loaded
+                                        {t("Loaded")}
                                       </span>
                                     )}
                                     {running?.sizeVram !== null &&
                                       running?.sizeVram !== undefined && (
                                         <span>
-                                          {formatSize(running.sizeVram)} VRAM
+                                          {formatSize(running.sizeVram, locale)}{" "}
+                                          VRAM
                                         </span>
                                       )}
                                   </span>
@@ -561,8 +600,8 @@ export default function App() {
                                 disabled={actionDisabled}
                                 aria-label={
                                   busy
-                                    ? `${modelAction.action === "loading" ? "Loading" : "Unloading"} ${model.name}`
-                                    : `${running ? "Unload" : "Load"} ${model.name}`
+                                    ? `${t(modelAction.action === "loading" ? "Loading" : "Unloading")} ${model.name}`
+                                    : `${t(running ? "Unload" : "Load")} ${model.name}`
                                 }
                                 onClick={() =>
                                   changeModelState(model.name, !running)
@@ -575,11 +614,11 @@ export default function App() {
                                 )}
                                 {busy
                                   ? modelAction.action === "loading"
-                                    ? "Loading..."
-                                    : "Unloading..."
+                                    ? t("Loading...")
+                                    : t("Unloading...")
                                   : running
-                                    ? "Unload"
-                                    : "Load"}
+                                    ? t("Unload")
+                                    : t("Load")}
                               </button>
                             </div>
                           </li>
@@ -601,19 +640,22 @@ export default function App() {
                 chatModel={chatModel}
                 setChatModel={setChatModel}
                 connected={connection.state === "connected"}
+                locale={locale}
+                setLocale={setLocale}
+                appVersion={appVersion}
               />
             )}
           </section>
           {isModelView && (
-            <aside className="inspector" aria-label="Model inspector">
+            <aside className="inspector" aria-label={t("Model inspector")}>
               <div className="inspector-caption">
-                <span>MODEL INSPECTOR</span>
+                <span>{t("MODEL INSPECTOR")}</span>
                 {selectedModel && (
                   <button
                     type="button"
                     className="icon-button"
-                    aria-label="Back to models"
-                    title="Close inspector"
+                    aria-label={t("Back to models")}
+                    title={t("Back to models")}
                     onClick={() => setSelectedModel(null)}
                   >
                     <X size={16} />
@@ -623,8 +665,8 @@ export default function App() {
               {!selectedModel && (
                 <div className="empty-state inspector-empty">
                   <Box size={38} strokeWidth={1.3} />
-                  <h3>Select a model</h3>
-                  <p>Details, configuration and model actions.</p>
+                  <h3>{t("Select a model")}</h3>
+                  <p>{t("Details, configuration and model actions.")}</p>
                 </div>
               )}
               {connection.state === "connected" && selectedModel !== null && (
@@ -632,7 +674,7 @@ export default function App() {
                   <div className="inspector-model-icon">
                     <Box size={26} />
                   </div>
-                  <span className="eyebrow">LOCAL MODEL</span>
+                  <span className="eyebrow">{t("LOCAL MODEL")}</span>
                   <div className="models-heading">
                     <h2 id="details-title">{selectedModel}</h2>
                   </div>
@@ -644,15 +686,15 @@ export default function App() {
                     }}
                   >
                     <MessageSquare size={16} />
-                    Open in Chat
+                    {t("Open in Chat")}
                     <ChevronRight size={14} />
                   </button>
                   <div role="status" aria-live="polite">
                     {details.state === "loading" && (
-                      <p>Loading model details...</p>
+                      <p>{t("Loading model details...")}</p>
                     )}
                     {details.state === "error" && (
-                      <p>Could not load model details</p>
+                      <p>{t("Could not load model details")}</p>
                     )}
                     {details.state === "loaded" &&
                       ![
@@ -664,11 +706,13 @@ export default function App() {
                         details.value.template,
                         details.value.system,
                         Object.keys(details.value.model_info ?? {}).length > 0,
-                      ].some(Boolean) && <p>Model details unavailable</p>}
+                      ].some(Boolean) && (
+                        <p>{t("Model details unavailable")}</p>
+                      )}
                   </div>
                   {details.state === "error" && (
                     <button type="button" onClick={retryDetails}>
-                      Retry details
+                      {t("Retry details")}
                     </button>
                   )}
                   {details.state === "loaded" &&
@@ -680,10 +724,10 @@ export default function App() {
                     ].some(Boolean) && (
                       <dl className="detail-list">
                         {[
-                          ["Format", details.value.format],
-                          ["Family", details.value.family],
-                          ["Parameters", details.value.parameter_size],
-                          ["Quantization", details.value.quantization_level],
+                          [t("Format"), details.value.format],
+                          [t("Family"), details.value.family],
+                          [t("Parameters"), details.value.parameter_size],
+                          [t("Quantization"), details.value.quantization_level],
                         ].map(
                           ([label, value]) =>
                             value && (
@@ -699,9 +743,9 @@ export default function App() {
                     hasModelConfiguration(details.value) && (
                       <div className="configuration-list">
                         {[
-                          ["Model parameters", details.value.parameters],
-                          ["Prompt template", details.value.template],
-                          ["System prompt", details.value.system],
+                          [t("Model parameters"), details.value.parameters],
+                          [t("Prompt template"), details.value.template],
+                          [t("System prompt"), details.value.system],
                         ].map(
                           ([label, value]) =>
                             value && (
@@ -714,7 +758,7 @@ export default function App() {
                         {Object.keys(details.value.model_info ?? {}).length >
                           0 && (
                           <details>
-                            <summary>Model information</summary>
+                            <summary>{t("Model information")}</summary>
                             <dl className="model-info-list">
                               {Object.entries(
                                 details.value.model_info ?? {},
@@ -731,27 +775,27 @@ export default function App() {
                     )}
                   <div className="model-management">
                     <div className="section-heading">
-                      <h3>Manage model</h3>
-                      <span className="preview-label">Pending</span>
+                      <h3>{t("Manage model")}</h3>
+                      <span className="preview-label">{t("Pending")}</span>
                     </div>
-                    <button disabled aria-label="Rename model">
+                    <button disabled aria-label={t("Rename model")}>
                       <Pencil size={15} />
-                      Rename
+                      {t("Rename")}
                     </button>
-                    <button disabled aria-label="Duplicate model">
+                    <button disabled aria-label={t("Duplicate model")}>
                       <Copy size={15} />
-                      Duplicate
+                      {t("Duplicate")}
                     </button>
                     <button
                       disabled
-                      aria-label="Delete model"
+                      aria-label={t("Delete model")}
                       className="danger"
                     >
                       <Trash2 size={15} />
-                      Delete model
+                      {t("Delete model")}
                     </button>
                     <span className="quiet-note">
-                      Model management is not connected yet.
+                      {t("Model management is not connected yet.")}
                     </span>
                   </div>
                 </div>
@@ -763,7 +807,7 @@ export default function App() {
       <footer className="statusbar">
         <span className="footer-brand">
           <Box size={13} />
-          Lokvyn <span>0.1.0</span>
+          Lokvyn <span>{appVersion || t("Version unavailable")}</span>
         </span>
         <span className="connection" role="status">
           <i
@@ -771,19 +815,21 @@ export default function App() {
           />
           {connection.state === "connected" ? (
             <>
-              <span>Connected</span>
-              <span className="version">Version {connection.version}</span>
+              <span>{t("Connected")}</span>
+              <span className="version">
+                {t("Version")} {connection.version}
+              </span>
             </>
           ) : connection.state === "connecting" ? (
-            "Connecting"
+            t("Connecting")
           ) : (
-            "Disconnected"
+            t("Disconnected")
           )}
         </span>
         <span className="footer-end">
           <Server size={13} />
-          Local Ollama
-          <span className="development-label">Development build</span>
+          {t("Local Ollama")}
+          <span className="development-label">{t("Development build")}</span>
         </span>
       </footer>
     </div>

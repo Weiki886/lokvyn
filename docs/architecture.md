@@ -6,7 +6,7 @@
 
 The current application can detect a local Ollama service, list installed models, refresh the list, display selected model metadata and read-only configuration, and load or unload installed models in memory. Loaded state comes from Ollama's running-model list and can change outside the app or after Ollama's keep-alive timeout.
 
-The application currently targets `127.0.0.1:11434`. It does not start or stop the Ollama service, manage model files, provide chat, or persist conversations or settings. Model lifecycle controls affect only whether an installed model is loaded in Ollama memory. Whether chat, model downloads or deletion, history, or a configurable service address belong in the first release remains open in Issue #1. Other model services are future possibilities only; a generic provider framework is not part of the current implementation.
+The application currently targets `127.0.0.1:11434`. It does not start or stop the Ollama service, manage model files, provide chat, or persist conversations. The English or Simplified Chinese language preference is stored locally in the webview; no other settings are persisted. Model lifecycle controls affect only whether an installed model is loaded in Ollama memory. Whether chat, model downloads or deletion, history, or a configurable service address belong in the first release remains open in Issue #1. Other model services are future possibilities only; a generic provider framework is not part of the current implementation.
 
 The MVP target is macOS, matching the documented development and CI environment. Windows and Linux are not MVP targets. The MVP is a developer-run desktop application; installers, signing, and public distribution are deferred until there is a concrete release requirement.
 
@@ -16,7 +16,7 @@ The MVP target is macOS, matching the documented development and CI environment.
 | --- | --- | --- |
 | Desktop shell | Tauri 2 with Rust | Provides the native window and a Rust-owned local-service request boundary. |
 | User interface | React and TypeScript | Owns presentation, navigation, and transient loading, success, empty, and error states. |
-| Persistence | None | Current views read live Ollama responses and do not require a local database. Revisit only if an accepted feature needs durable state. |
+| Persistence | Webview local storage for language only | The `lokvyn.locale` preference survives restarts. Ollama data remains live; no database, conversations, or credentials are stored. If storage is unavailable, the selection lasts for the current session. |
 | Build and checks | npm, Vite, TypeScript, Vitest, Cargo | Lockfiles and macOS CI are in place; the documented commands are listed in the README. |
 
 These are the choices reflected by the merged implementation and the selected MVP boundary. Changes to product scope or target platforms require a separate review.
