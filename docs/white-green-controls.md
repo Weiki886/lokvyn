@@ -14,6 +14,35 @@ match the workspace, and no existing dependency provides a select primitive.
 Search inputs and the message field share `TextInput` and `TextArea` styles.
 No additional dependencies or backend changes are needed.
 
+## Directory Refinement
+
+The workspace should feel like a compact local model control desk: scanning and
+comparing model information take priority over promotional cards. Keep the white
+main surface and forest green emphasis, with neutral sidebar/header bands,
+readable secondary text, aligned columns, and consistent Lucide capability icons.
+Capability colors distinguish chat, vision, code, and embeddings; they are not
+invented vendor logos.
+
+The signature is a model directory with name/description, focus, capability, and
+download columns. Replace the equal-weight card grid and repeated introduction
+with a compact library summary and filters. Omit secondary columns on narrow
+windows, retaining every model's name, description, and labeled action. The
+sidebar service summary uses actual installed/running counts, with explicit
+loading/unavailable states instead of misleading zeros. Do not invent sizes,
+popularity, parameters, or catalog connectivity to fill space.
+
+Refinement plan (maintained code, continuing Issue #21 and PR #22):
+
+1. Add failing application tests for the semantic directory, filtered counts,
+   translated headings, disabled downloads, and loaded/unknown service counts.
+2. Replace catalog cards in `src/WorkspaceViews.tsx`, update the sidebar summary
+   in `src/App.tsx`, and add English/Chinese labels in `src/i18n.ts`.
+3. Refine spacing, contrast, typography, and responsive columns in `src/style.css`.
+   Reuse existing controls and icons; keep all Ollama actions and preview limits.
+4. Run the frontend checks, inspect all seven views in both languages at desktop,
+   minimum desktop, and narrow widths, then build and launch the native app.
+   Record actual evidence and any native inspection limitation in PR #22.
+
 ## Implementation Plan
 
 1. Add failing interaction tests in `src/FormControls.test.tsx` for a controlled

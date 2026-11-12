@@ -5,9 +5,9 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --ink: #202b2a;
-  --muted: #687772;
+  --muted: #5f6d67;
   --subtle: #596762;
-  --line: #dce3df;
+  --line: #d6ded9;
   --surface: #fff;
   --surface-muted: #f6f8f7;
   --canvas: #fff;
@@ -145,7 +145,7 @@ button:disabled {
   flex-direction: column;
   min-height: 0;
   padding: 16px 12px 12px;
-  background: var(--surface);
+  background: var(--surface-muted);
   border-right: 1px solid var(--line);
 }
 .sidebar nav {
@@ -153,12 +153,12 @@ button:disabled {
   overflow-y: auto;
 }
 .nav-group + .nav-group {
-  margin-top: 23px;
+  margin-top: 20px;
 }
 .nav-label {
   margin: 0 8px 7px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 .nav-item {
@@ -205,27 +205,58 @@ button:disabled {
   font-size: 11px;
 }
 .sidebar-service {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.service-heading {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 12px 8px 2px;
-  border-top: 1px solid var(--line);
+  gap: 7px;
+  min-width: 0;
   color: var(--brand);
 }
-.sidebar-service div {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 3px;
+.service-heading .status-dot {
+  margin-left: auto;
 }
 .sidebar-service strong {
   color: var(--ink);
   font-size: 12px;
 }
-.sidebar-service span {
+.service-summary code {
+  display: block;
+  margin: 8px 0 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
+}
+.service-summary p {
+  margin: 0 0 12px;
+  color: var(--subtle);
+  font-size: 11px;
+}
+.service-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+}
+.service-summary dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.service-summary dt {
+  color: var(--subtle);
+}
+.service-summary dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .status-dot {
   display: inline-block;
@@ -249,8 +280,8 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 78px;
-  padding: 13px 22px;
+  min-height: 66px;
+  padding: 10px 22px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
@@ -258,7 +289,7 @@ button:disabled {
   display: block;
   margin: 0 0 4px;
   color: var(--brand);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
 }
 h1 {
@@ -807,16 +838,34 @@ h1 {
 .view-heading p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
+}
+.directory-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.directory-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.directory-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.directory-heading .preview-label {
+  margin-left: auto;
 }
 .filter-bar {
   display: flex;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 14px;
 }
 .filter-bar .search-field {
   flex: 1;
-  max-width: 380px;
 }
 .filter-bar .form-select {
   flex: 0 1 180px;
@@ -830,72 +879,108 @@ h1 {
   flex: 1;
 }
 .discover-view > .quiet-note {
-  margin: 10px 0 13px;
-}
-.catalog-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
-  gap: 9px;
-  align-content: start;
-}
-.catalog-item {
-  min-width: 0;
-  padding: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-.catalog-identity {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.family-mark {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  color: var(--brand-dark);
-  background: #e9eeea;
-  border-radius: 5px;
-  font-size: 13px;
-  font-weight: 700;
-}
-.capability {
-  padding: 3px 6px;
-  color: var(--subtle);
-  background: #edf1ed;
-  border-radius: 3px;
-  font-size: 9px;
-}
-.catalog-item h3 {
-  margin: 10px 0 5px;
-  font-size: 13px;
-}
-.catalog-item > p {
-  min-height: 32px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 10px;
+  margin: 10px 0 16px;
+  font-size: 12px;
   line-height: 1.5;
 }
-.catalog-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-top: 9px;
-  padding-top: 7px;
-  border-top: 1px solid #edf1ed;
+.model-directory {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: left;
 }
-.catalog-bottom > span {
-  min-width: 0;
+.model-directory thead {
   color: var(--subtle);
-  font-size: 9px;
+  background: var(--surface-muted);
+}
+.model-directory th,
+.model-directory td {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.model-directory thead th {
+  padding-top: 9px;
+  padding-bottom: 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.model-directory tbody th {
+  font-weight: 400;
+}
+.model-directory tbody tr:hover {
+  background: #f8faf9;
+}
+.model-directory .directory-focus {
+  width: 23%;
+  color: var(--subtle);
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
-.catalog-bottom button {
+.model-directory .directory-capability {
+  width: 120px;
+}
+.model-directory .directory-action {
+  width: 76px;
+  text-align: right;
+}
+.directory-model {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.directory-model > div {
+  min-width: 0;
+}
+.directory-model strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.directory-model p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.model-symbol {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid rgb(32 43 42 / 8%);
+  border-radius: 7px;
+}
+.capability-chat {
+  color: #285e49;
+  background: #eaf3ed;
+}
+.capability-vision {
+  color: #885917;
+  background: #faf1df;
+}
+.capability-code {
+  color: #356292;
+  background: #edf3fb;
+}
+.capability-embedding {
+  color: #865168;
+  background: #f6ecf1;
+}
+.capability {
+  display: inline-block;
+  padding: 4px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.directory-action button {
   color: var(--brand);
+  border-color: var(--line);
+  background: var(--surface);
 }
 .empty-state {
   display: grid;
@@ -1059,7 +1144,9 @@ h1 {
 .sidebar-collapsed .nav-label,
 .sidebar-collapsed .nav-item > span,
 .sidebar-collapsed .nav-item small,
-.sidebar-collapsed .sidebar-service div {
+.sidebar-collapsed .service-summary,
+.sidebar-collapsed .service-heading strong,
+.sidebar-collapsed .service-heading .status-dot {
   display: none;
 }
 .sidebar-collapsed .sidebar {
@@ -1075,11 +1162,20 @@ h1 {
   padding: 0;
 }
 .sidebar-collapsed .sidebar-service {
+  display: flex;
   justify-content: center;
   width: 100%;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
 }
 
 @media (max-width: 900px) {
+  .model-directory .directory-focus {
+    display: none;
+  }
   .app-shell {
     grid-template-columns: 190px minmax(0, 1fr);
   }
@@ -1154,7 +1250,9 @@ h1 {
   .nav-label,
   .nav-item > span,
   .nav-item small,
-  .sidebar-service div {
+  .service-summary,
+  .service-heading strong,
+  .service-heading .status-dot {
     display: none;
   }
   .nav-group + .nav-group {
@@ -1165,8 +1263,13 @@ h1 {
     padding: 0;
   }
   .sidebar-service {
+    display: flex;
     justify-content: center;
     padding: 10px 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
   }
   .workspace-heading {
     min-height: 64px;
@@ -1223,6 +1326,26 @@ h1 {
   }
 }
 @media (max-width: 440px) {
+  .directory-heading .preview-label {
+    margin-left: 0;
+  }
+  .model-directory .directory-capability {
+    display: none;
+  }
+  .model-directory th,
+  .model-directory td {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+  .model-directory .directory-action {
+    width: 55px;
+  }
+  .directory-model {
+    gap: 8px;
+  }
+  .directory-model strong {
+    font-size: 13px;
+  }
   .workspace-heading .primary {
     min-height: 30px;
     padding: 0 7px;

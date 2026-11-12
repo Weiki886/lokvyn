@@ -363,16 +363,56 @@ export default function App() {
             </div>
           ))}
         </nav>
-        <div className="sidebar-service">
-          <Server size={18} />
-          <div>
+        <section className="sidebar-service" aria-label={t("Local Ollama")}>
+          <div className="service-heading">
+            <Server size={17} />
             <strong>{t("Local Ollama")}</strong>
-            <span>127.0.0.1:11434</span>
+            <i
+              className={`status-dot ${connection.state === "connected" ? "online" : ""}`}
+            />
           </div>
-          <i
-            className={`status-dot ${connection.state === "connected" ? "online" : ""}`}
-          />
-        </div>
+          <div className="service-summary">
+            <code>127.0.0.1:11434</code>
+            <p>
+              {t(
+                connection.state === "connected"
+                  ? "Service available"
+                  : connection.state === "connecting"
+                    ? "Connecting"
+                    : "Unavailable",
+              )}
+            </p>
+            <dl>
+              <div>
+                <dt>{t("Installed models")}</dt>
+                <dd aria-label={t("Installed models")}>
+                  {connection.state === "connected" && models.state === "loaded"
+                    ? models.models.length
+                    : t(
+                        connection.state === "unavailable" ||
+                          models.state === "error"
+                          ? "Unavailable"
+                          : "Loading",
+                      )}
+                </dd>
+              </div>
+              <div>
+                <dt>{t("Running models")}</dt>
+                <dd aria-label={t("Running models")}>
+                  {connection.state === "connected" &&
+                  runningModels.state === "loaded"
+                    ? runningModels.models.length
+                    : t(
+                        connection.state === "unavailable" ||
+                          runningModels.state === "error"
+                          ? "Unavailable"
+                          : "Loading",
+                      )}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </section>
       </aside>
       <main className="main-workspace">
         <div className="workspace-heading">

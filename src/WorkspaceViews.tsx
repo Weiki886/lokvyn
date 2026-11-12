@@ -5,9 +5,12 @@ import {
   Box,
   Check,
   CircleDashed,
+  Code2,
   Download,
   KeyRound,
   MessageSquare,
+  Network,
+  ScanEye,
   Search,
   Server,
 } from "lucide-react";
@@ -26,47 +29,48 @@ export type View =
 const catalog = [
   {
     name: "qwen3",
-    mark: "Q",
     description: "Reasoning and multilingual conversation.",
     capability: "Chat",
     tags: "Reasoning · Multilingual",
   },
   {
     name: "gemma3",
-    mark: "G",
     description: "Text and image understanding in one family.",
     capability: "Vision",
     tags: "Vision · Multimodal",
   },
   {
     name: "llama3.2",
-    mark: "L",
     description: "Compact models for everyday language tasks.",
     capability: "Chat",
     tags: "Chat · Lightweight",
   },
   {
     name: "deepseek-r1",
-    mark: "D",
     description: "A model family focused on reasoning.",
     capability: "Chat",
     tags: "Reasoning · Chat",
   },
   {
     name: "qwen2.5-coder",
-    mark: "Q",
     description: "Code generation, completion and understanding.",
     capability: "Code",
     tags: "Code · Completion",
   },
   {
     name: "nomic-embed-text",
-    mark: "N",
     description: "Text embeddings for search and retrieval.",
     capability: "Embedding",
     tags: "Embedding · Retrieval",
   },
 ];
+
+const capabilityIcons = {
+  Chat: MessageSquare,
+  Vision: ScanEye,
+  Code: Code2,
+  Embedding: Network,
+};
 
 function ModelSelector({
   models,
@@ -127,11 +131,13 @@ export default function WorkspaceViews({
     );
     return (
       <section className="discover-view">
-        <div className="view-heading">
-          <div>
-            <h2>{t("Find your next model")}</h2>
-            <p>{t("Explore model families from the Ollama library.")}</p>
-          </div>
+        <div className="directory-heading">
+          <h2>{t("Ollama library")}</h2>
+          <span className="directory-count" aria-live="polite">
+            {t("{shown} of {total} model families")
+              .replace("{shown}", String(filtered.length))
+              .replace("{total}", String(catalog.length))}
+          </span>
           <span className="preview-label">{t("Catalog preview")}</span>
         </div>
         <div className="filter-bar">
@@ -163,29 +169,65 @@ export default function WorkspaceViews({
             "Selected examples only. Live catalog and downloads are not connected.",
           )}
         </p>
-        <div className="catalog-grid">
-          {filtered.map((model) => (
-            <article className="catalog-item" key={model.name}>
-              <div className="catalog-identity">
-                <span className="family-mark">{model.mark}</span>
-                <span className="capability">{t(model.capability)}</span>
-              </div>
-              <h3>{model.name}</h3>
-              <p>{t(model.description)}</p>
-              <div className="catalog-bottom">
-                <span>{t(model.tags)}</span>
-                <button
-                  className="icon-button"
-                  aria-label={`${t("Download")} ${model.name}`}
-                  title={t("Downloads not connected")}
-                  disabled
-                >
-                  <ArrowDownToLine size={17} />
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+        <table className="model-directory" aria-label={t("Model directory")}>
+          <thead>
+            <tr>
+              <th scope="col">{t("Model family")}</th>
+              <th scope="col" className="directory-focus">
+                {t("Focus")}
+              </th>
+              <th scope="col" className="directory-capability">
+                {t("Capability")}
+              </th>
+              <th scope="col" className="directory-action">
+                {t("Download")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((model) => {
+              const Icon =
+                capabilityIcons[
+                  model.capability as keyof typeof capabilityIcons
+                ];
+              return (
+                <tr key={model.name}>
+                  <th scope="row">
+                    <div className="directory-model">
+                      <span
+                        className={`model-symbol capability-${model.capability.toLowerCase()}`}
+                      >
+                        <Icon size={20} strokeWidth={1.7} />
+                      </span>
+                      <div>
+                        <strong>{model.name}</strong>
+                        <p>{t(model.description)}</p>
+                      </div>
+                    </div>
+                  </th>
+                  <td className="directory-focus">{t(model.tags)}</td>
+                  <td className="directory-capability">
+                    <span
+                      className={`capability capability-${model.capability.toLowerCase()}`}
+                    >
+                      {t(model.capability)}
+                    </span>
+                  </td>
+                  <td className="directory-action">
+                    <button
+                      className="icon-button"
+                      aria-label={`${t("Download")} ${model.name}`}
+                      title={t("Downloads not connected")}
+                      disabled
+                    >
+                      <ArrowDownToLine size={17} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
         {filtered.length === 0 && (
           <div className="empty-state">
             <Search size={30} />

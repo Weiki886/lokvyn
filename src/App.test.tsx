@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -476,15 +477,28 @@ describe("desktop workspace", () => {
       screen.getByRole("button", { name: "Navigate to Discover" }),
     );
     expect(screen.getByText("Catalog preview")).toBeTruthy();
+    const directory = screen.getByRole("table", { name: "Model directory" });
+    expect(within(directory).getAllByRole("row")).toHaveLength(7);
+    for (const heading of ["Model family", "Focus", "Capability", "Download"]) {
+      expect(
+        within(directory).getByRole("columnheader", { name: heading }),
+      ).toBeTruthy();
+    }
+    for (const action of within(directory).getAllByRole("button")) {
+      expect(action.hasAttribute("disabled")).toBe(true);
+    }
+    expect(screen.getByText("6 of 6 model families")).toBeTruthy();
     fireEvent.change(
       screen.getByRole("searchbox", { name: "Search catalog preview" }),
       { target: { value: "qwen" } },
     );
     expect(screen.getByText("qwen3")).toBeTruthy();
     expect(screen.queryByText("gemma3")).toBeNull();
+    expect(screen.getByText("2 of 6 model families")).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "Capability" }));
     fireEvent.click(screen.getByRole("option", { name: "Embedding" }));
     expect(screen.getByText("No matching models")).toBeTruthy();
+    expect(screen.getByText("0 of 6 model families")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
     expect(
       screen
@@ -501,6 +515,58 @@ describe("desktop workspace", () => {
     ).toBe(true);
     expect(screen.getByText("Gateway not configured")).toBeTruthy();
     await screen.findByText("Connected");
+  });
+
+  it("summarizes actual local model counts in the sidebar", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_models"
+            ? [ollamaModel("alpha:latest"), ollamaModel("beta:latest")]
+            : command === "ollama_running_models"
+              ? [{ name: "alpha:latest", sizeVram: null, expiresAt: null }]
+              : [],
+      ),
+    );
+    render(<App />);
+    const service = screen.getByRole("region", { name: "Local Ollama" });
+    await waitFor(() => {
+      expect(
+        within(service).getByLabelText("Installed models").textContent,
+      ).toBe("2");
+      expect(within(service).getByLabelText("Running models").textContent).toBe(
+        "1",
+      );
+    });
+    expect(within(service).getByText("Service available")).toBeTruthy();
+  });
+
+  it("keeps unknown and failed sidebar counts distinct from zero", async () => {
+    let rejectModels: (reason: Error) => void = () => {};
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_models")
+        return new Promise((_resolve, reject) => {
+          rejectModels = reject;
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    const service = screen.getByRole("region", { name: "Local Ollama" });
+    expect(within(service).getByLabelText("Installed models").textContent).toBe(
+      "Loading",
+    );
+    await screen.findByText("Connected");
+    rejectModels(new Error("unavailable"));
+    await waitFor(() => {
+      expect(
+        within(service).getByLabelText("Installed models").textContent,
+      ).toBe("Unavailable");
+      expect(within(service).getByLabelText("Running models").textContent).toBe(
+        "0",
+      );
+    });
   });
 });
 
@@ -598,10 +664,13 @@ describe("language and application version settings", () => {
     localStorage.setItem("lokvyn.locale", "zh-CN");
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "导航到发现模型" }));
+    expect(screen.getByRole("table", { name: "模型目录" })).toBeTruthy();
+    expect(screen.getByText("6 / 6 个模型系列")).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "能力类型" }));
     fireEvent.click(screen.getByRole("option", { name: "向量嵌入" }));
     expect(screen.getByText("nomic-embed-text")).toBeTruthy();
     expect(screen.queryByText("qwen3")).toBeNull();
+    expect(screen.getByText("1 / 6 个模型系列")).toBeTruthy();
     expect(screen.getByText("用于搜索与检索的文本向量。")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "下载 nomic-embed-text" }),
