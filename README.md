@@ -4,6 +4,8 @@ Lokvyn is a desktop GUI focused on local Ollama. It checks the connection, lists
 
 The application connects only to `127.0.0.1:11434` and does not start Ollama. Start Ollama separately to see the connected state. The address is not configurable.
 
+In Settings, choose English or Simplified Chinese. The interface updates immediately and remembers the selection on this computer using the webview's local storage. English is the initial default. Model names and Ollama configuration values retain their original content. Settings and the status bar show the application version from Tauri metadata, separately from the connected Ollama server version.
+
 ## Development
 
 The initial development environment is macOS. Other operating systems and distribution formats are not yet confirmed or validated. Install Node.js 24, Rust and the macOS prerequisites described in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), including Xcode Command Line Tools.

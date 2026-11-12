@@ -11,6 +11,7 @@ import {
   Search,
   Server,
 } from "lucide-react";
+import { translate, type Locale } from "./i18n";
 
 export type View =
   | "Discover"
@@ -70,18 +71,21 @@ function ModelSelector({
   models,
   model,
   setModel,
+  locale,
 }: {
   models: string[];
   model: string;
   setModel: (model: string) => void;
+  locale: Locale;
 }) {
+  const t = (source: string) => translate(locale, source);
   return (
     <select
-      aria-label="Select model"
+      aria-label={t("Select model")}
       value={model}
       onChange={(event) => setModel(event.target.value)}
     >
-      <option value="">Select an installed model</option>
+      <option value="">{t("Select an installed model")}</option>
       {models.map((name) => (
         <option key={name} value={name}>
           {name}
@@ -97,13 +101,20 @@ export default function WorkspaceViews({
   chatModel,
   setChatModel,
   connected,
+  locale,
+  setLocale,
+  appVersion,
 }: {
   view: View;
   models: string[];
   chatModel: string;
   setChatModel: (model: string) => void;
   connected: boolean;
+  locale: Locale;
+  setLocale: (locale: Locale) => void;
+  appVersion: string;
 }) {
+  const t = (source: string) => translate(locale, source);
   const [query, setQuery] = useState("");
   const [capability, setCapability] = useState("All capabilities");
   const [apiModel, setApiModel] = useState("");
@@ -120,52 +131,56 @@ export default function WorkspaceViews({
       <section className="discover-view">
         <div className="view-heading">
           <div>
-            <h2>Find your next model</h2>
-            <p>Explore model families from the Ollama library.</p>
+            <h2>{t("Find your next model")}</h2>
+            <p>{t("Explore model families from the Ollama library.")}</p>
           </div>
-          <span className="preview-label">Catalog preview</span>
+          <span className="preview-label">{t("Catalog preview")}</span>
         </div>
         <div className="filter-bar">
           <label className="search-field">
             <Search size={16} />
             <input
               type="search"
-              aria-label="Search catalog preview"
-              placeholder="Search model families..."
+              aria-label={t("Search catalog preview")}
+              placeholder={t("Search model families...")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
           <select
-            aria-label="Capability"
+            aria-label={t("Capability")}
             value={capability}
             onChange={(event) => setCapability(event.target.value)}
           >
             {["All capabilities", "Chat", "Vision", "Code", "Embedding"].map(
               (value) => (
-                <option key={value}>{value}</option>
+                <option key={value} value={value}>
+                  {t(value)}
+                </option>
               ),
             )}
           </select>
         </div>
         <p className="quiet-note">
-          Selected examples only. Live catalog and downloads are not connected.
+          {t(
+            "Selected examples only. Live catalog and downloads are not connected.",
+          )}
         </p>
         <div className="catalog-grid">
           {filtered.map((model) => (
             <article className="catalog-item" key={model.name}>
               <div className="catalog-identity">
                 <span className="family-mark">{model.mark}</span>
-                <span className="capability">{model.capability}</span>
+                <span className="capability">{t(model.capability)}</span>
               </div>
               <h3>{model.name}</h3>
-              <p>{model.description}</p>
+              <p>{t(model.description)}</p>
               <div className="catalog-bottom">
-                <span>{model.tags}</span>
+                <span>{t(model.tags)}</span>
                 <button
                   className="icon-button"
-                  aria-label={`Download ${model.name}`}
-                  title="Downloads not connected"
+                  aria-label={`${t("Download")} ${model.name}`}
+                  title={t("Downloads not connected")}
                   disabled
                 >
                   <ArrowDownToLine size={17} />
@@ -177,8 +192,8 @@ export default function WorkspaceViews({
         {filtered.length === 0 && (
           <div className="empty-state">
             <Search size={30} />
-            <h3>No matching models</h3>
-            <p>Try another name or capability.</p>
+            <h3>{t("No matching models")}</h3>
+            <p>{t("Try another name or capability.")}</p>
           </div>
         )}
       </section>
@@ -188,19 +203,19 @@ export default function WorkspaceViews({
     return (
       <section className="full-view">
         <div className="section-toolbar">
-          <span>Download queue</span>
-          <span className="preview-label">Not connected</span>
+          <span>{t("Download queue")}</span>
+          <span className="preview-label">{t("Not connected")}</span>
         </div>
         <div className="empty-state">
           <Download size={40} strokeWidth={1.4} />
-          <h2>No download tasks</h2>
-          <p>Model downloads are not connected yet.</p>
+          <h2>{t("No download tasks")}</h2>
+          <p>{t("Model downloads are not connected yet.")}</p>
           <button disabled>
             <ArrowDownToLine size={16} />
-            Add download
+            {t("Add download")}
           </button>
         </div>
-        <div className="view-footnote">Queue · Progress · Retry</div>
+        <div className="view-footnote">{t("Queue · Progress · Retry")}</div>
       </section>
     );
   if (view === "Chat")
@@ -213,28 +228,29 @@ export default function WorkspaceViews({
               models={models}
               model={selectedChat}
               setModel={setChatModel}
+              locale={locale}
             />
           </div>
-          <span className="preview-label">Not connected</span>
+          <span className="preview-label">{t("Not connected")}</span>
         </div>
         <div className="empty-state">
           <MessageSquare size={42} strokeWidth={1.3} />
-          <h2>{selectedChat || "A conversation, locally."}</h2>
-          <p>Chat generation is not connected yet.</p>
+          <h2>{selectedChat || t("A conversation, locally.")}</h2>
+          <p>{t("Chat generation is not connected yet.")}</p>
         </div>
         <div className="composer">
           <textarea
-            aria-label="Message"
-            placeholder="Message your local model..."
+            aria-label={t("Message")}
+            placeholder={t("Message your local model...")}
             disabled
             rows={3}
           />
           <div>
-            <span>Local model · Chat pending</span>
+            <span>{t("Local model · Chat pending")}</span>
             <button
               className="icon-button primary"
-              aria-label="Send message"
-              title="Chat not connected"
+              aria-label={t("Send message")}
+              title={t("Chat not connected")}
               disabled
             >
               <ArrowUp size={18} />
@@ -248,34 +264,35 @@ export default function WorkspaceViews({
       <section className="api-view">
         <div className="view-heading">
           <div>
-            <h2>Model access</h2>
-            <p>Manage how applications will connect to your models.</p>
+            <h2>{t("Model access")}</h2>
+            <p>{t("Manage how applications will connect to your models.")}</p>
           </div>
-          <span className="preview-label">Gateway not configured</span>
+          <span className="preview-label">{t("Gateway not configured")}</span>
         </div>
         <div className="settings-section">
           <h3>
             <Server size={17} />
-            Ollama endpoint
+            {t("Ollama endpoint")}
           </h3>
           <dl className="setting-list">
             <div>
-              <dt>Local endpoint</dt>
+              <dt>{t("Local endpoint")}</dt>
               <dd>
                 <code>http://127.0.0.1:11434</code>
               </dd>
             </div>
             <div>
-              <dt>Authentication</dt>
-              <dd>No Lokvyn key protection</dd>
+              <dt>{t("Authentication")}</dt>
+              <dd>{t("No Lokvyn key protection")}</dd>
             </div>
             <div>
-              <dt>Model</dt>
+              <dt>{t("Model")}</dt>
               <dd>
                 <ModelSelector
                   models={models}
                   model={selectedApi}
                   setModel={setApiModel}
+                  locale={locale}
                 />
               </dd>
             </div>
@@ -285,18 +302,20 @@ export default function WorkspaceViews({
           <div className="section-heading">
             <h3>
               <KeyRound size={17} />
-              API keys
+              {t("API keys")}
             </h3>
             <button disabled>
               <KeyRound size={16} />
-              Create API key
+              {t("Create API key")}
             </button>
           </div>
           <div className="empty-state compact">
             <KeyRound size={30} />
-            <h3>No API keys</h3>
+            <h3>{t("No API keys")}</h3>
             <p>
-              Key management requires a Lokvyn gateway. No gateway is running.
+              {t(
+                "Key management requires a Lokvyn gateway. No gateway is running.",
+              )}
             </p>
           </div>
         </div>
@@ -306,58 +325,72 @@ export default function WorkspaceViews({
     <section className="settings-view">
       <div className="view-heading">
         <div>
-          <h2>Local workspace</h2>
-          <p>Connection and application information.</p>
+          <h2>{t("Local workspace")}</h2>
+          <p>{t("Connection and application information.")}</p>
         </div>
       </div>
       <div className="settings-section">
         <h3>
           <Server size={17} />
-          Connection
+          {t("Connection")}
         </h3>
         <dl className="setting-list">
           <div>
-            <dt>Service</dt>
+            <dt>{t("Service")}</dt>
             <dd>Ollama</dd>
           </div>
           <div>
-            <dt>Address</dt>
+            <dt>{t("Address")}</dt>
             <dd>
               <code>127.0.0.1:11434</code>
             </dd>
           </div>
           <div>
-            <dt>Status</dt>
+            <dt>{t("Status")}</dt>
             <dd className="inline">
               {connected ? <Check size={16} /> : <CircleDashed size={16} />}
-              {connected ? "Available" : "Unavailable"}
+              {t(connected ? "Available" : "Unavailable")}
             </dd>
           </div>
           <div>
-            <dt>Endpoint configuration</dt>
-            <dd>Read only</dd>
+            <dt>{t("Endpoint configuration")}</dt>
+            <dd>{t("Read only")}</dd>
           </div>
         </dl>
       </div>
       <div className="settings-section">
         <h3>
           <Box size={17} />
-          Application
+          {t("Application")}
         </h3>
         <dl className="setting-list">
           <div>
-            <dt>Lokvyn</dt>
-            <dd>0.1.0 · Development build</dd>
+            <dt>{t("Application version")}</dt>
+            <dd>{appVersion || t("Version unavailable")}</dd>
           </div>
           <div>
-            <dt>Model service</dt>
-            <dd>Local Ollama</dd>
+            <dt>{t("Model service")}</dt>
+            <dd>{t("Local Ollama")}</dd>
           </div>
           <div>
-            <dt>Storage</dt>
-            <dd>No saved conversations or keys</dd>
+            <dt>{t("Storage")}</dt>
+            <dd>{t("No saved conversations or keys")}</dd>
           </div>
         </dl>
+      </div>
+      <div className="settings-section language-section">
+        <h3>{t("Language")}</h3>
+        <label className="language-setting">
+          <span>{t("Language")}</span>
+          <select
+            aria-label={t("Language")}
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as Locale)}
+          >
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
+        </label>
       </div>
     </section>
   );

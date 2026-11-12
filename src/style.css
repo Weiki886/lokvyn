@@ -1005,6 +1005,26 @@ h1 {
   border-radius: 3px;
   font-size: 10px;
 }
+.language-setting {
+  display: grid;
+  grid-template-columns: minmax(125px, 0.7fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--subtle);
+  font-size: 11px;
+}
+.language-setting select {
+  width: min(100%, 260px);
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+}
 .settings-section .section-heading button {
   background: #fff;
   color: var(--subtle);
@@ -1052,7 +1072,21 @@ h1 {
     flex-basis: 154px;
   }
   .workspace-body.with-inspector {
-    grid-template-columns: minmax(300px, 1fr) minmax(230px, 270px);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .workspace-body.with-inspector .workspace-content {
+    flex: 0 0 auto;
+    min-height: 300px;
+    overflow: visible;
+  }
+  .workspace-body.with-inspector .inspector {
+    flex: 0 0 auto;
+    min-height: 220px;
+    overflow: visible;
+    border-top: 1px solid var(--line);
+    border-left: 0;
   }
   .workspace-content {
     padding-right: 15px;
@@ -1124,23 +1158,6 @@ h1 {
   }
   h1 {
     font-size: 17px;
-  }
-  .workspace-body.with-inspector {
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-  .workspace-body.with-inspector .workspace-content {
-    flex: 0 0 auto;
-    min-height: 300px;
-    overflow: visible;
-  }
-  .workspace-body.with-inspector .inspector {
-    flex: 0 0 auto;
-    min-height: 220px;
-    overflow: visible;
-    border-top: 1px solid var(--line);
-    border-left: 0;
   }
   .workspace-content {
     padding: 12px;

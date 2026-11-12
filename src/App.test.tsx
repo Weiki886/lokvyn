@@ -7,15 +7,19 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import App from "./App";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 const ollamaModel = (name: string) => ({
   name,
   size: null,
   modifiedAt: null,
 });
 beforeEach(() => {
+  localStorage.clear();
+  vi.mocked(getVersion).mockResolvedValue("0.1.0");
   vi.mocked(invoke).mockImplementation((command) =>
     Promise.resolve(command === "ollama_connection" ? "0.1.0" : []),
   );
@@ -89,7 +93,7 @@ describe("installed models", () => {
     expect(screen.getByText("4 GiB")).toBeTruthy();
     expect(
       screen.getByText(
-        new Intl.DateTimeFormat(undefined, {
+        new Intl.DateTimeFormat("en", {
           dateStyle: "medium",
           timeStyle: "short",
         }).format(new Date("2025-01-02T03:04:05Z")),
@@ -498,5 +502,139 @@ describe("desktop workspace", () => {
     ).toBe(true);
     expect(screen.getByText("Gateway not configured")).toBeTruthy();
     await screen.findByText("Connected");
+  });
+});
+
+describe("language and application version settings", () => {
+  it("switches all application UI to Chinese and persists the preference", async () => {
+    const { unmount } = render(<App />);
+    await screen.findByText("Connected");
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Language" }), {
+      target: { value: "zh-CN" },
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "设置", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "导航到发现模型" })).toBeTruthy();
+    expect(screen.getByText("已连接")).toBeTruthy();
+    expect(screen.getByText("应用版本")).toBeTruthy();
+    expect(screen.getAllByText("0.1.0")).toHaveLength(2);
+    expect(localStorage.getItem("lokvyn.locale")).toBe("zh-CN");
+
+    for (const [label, heading] of [
+      ["发现模型", "发现模型"],
+      ["已安装模型", "已安装模型"],
+      ["运行中的模型", "运行中的模型"],
+      ["下载", "下载"],
+      ["对话", "对话"],
+      ["API 访问", "API 访问"],
+      ["设置", "设置"],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: `导航到${label}` }));
+      expect(
+        screen.getByRole("heading", { name: heading, level: 1 }),
+      ).toBeTruthy();
+    }
+
+    unmount();
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "已安装模型", level: 1 }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "导航到设置" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "导航到设置" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
+      target: { value: "en" },
+    });
+    expect(
+      screen.getByRole("heading", { name: "Settings", level: 1 }),
+    ).toBeTruthy();
+    expect(localStorage.getItem("lokvyn.locale")).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("localizes model dates and labels while preserving Ollama content", async () => {
+    localStorage.setItem("lokvyn.locale", "zh-CN");
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.2.0"
+          : command === "ollama_models"
+            ? [
+                {
+                  name: "Chat:latest",
+                  size: 512,
+                  modifiedAt: "2025-01-02T03:04:05Z",
+                },
+              ]
+            : command === "ollama_model_details"
+              ? {
+                  format: "gguf",
+                  parameters: "temperature 0.7",
+                  system: "Chat",
+                  model_info: {},
+                }
+              : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Chat:latest" }));
+    expect(screen.getByText("512 字节")).toBeTruthy();
+    expect(
+      screen.getByText(
+        new Intl.DateTimeFormat("zh-CN", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date("2025-01-02T03:04:05Z")),
+      ),
+    ).toBeTruthy();
+    expect(await screen.findByText("temperature 0.7")).toBeTruthy();
+    expect(screen.getByText("Chat")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重命名模型" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制模型" })).toBeTruthy();
+    expect(document.documentElement.lang).toBe("zh-CN");
+  });
+
+  it("keeps catalog filters working with translated options", async () => {
+    localStorage.setItem("lokvyn.locale", "zh-CN");
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "导航到发现模型" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "能力类型" }), {
+      target: { value: "Embedding" },
+    });
+    expect(screen.getByText("nomic-embed-text")).toBeTruthy();
+    expect(screen.queryByText("qwen3")).toBeNull();
+    expect(screen.getByText("用于搜索与检索的文本向量。")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "下载 nomic-embed-text" }),
+    ).toBeTruthy();
+    await screen.findByText("已连接");
+  });
+
+  it("falls back to English for an unsupported saved locale", async () => {
+    localStorage.setItem("lokvyn.locale", "fr");
+    render(<App />);
+    expect(await screen.findByText("Connected")).toBeTruthy();
+    expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("shows a localized fallback when the runtime version is unavailable", async () => {
+    localStorage.setItem("lokvyn.locale", "zh-CN");
+    vi.mocked(getVersion).mockRejectedValue(new Error("unavailable"));
+    render(<App />);
+    await screen.findByText("已连接");
+    fireEvent.click(screen.getByRole("button", { name: "导航到设置" }));
+    expect(screen.getAllByText("版本信息不可用")).toHaveLength(2);
+    expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+  });
+
+  it("shows the Tauri runtime version in the footer and Settings", async () => {
+    vi.mocked(getVersion).mockResolvedValue("1.2.3");
+    render(<App />);
+    expect(await screen.findByText("1.2.3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(await screen.findAllByText("1.2.3")).toHaveLength(2);
   });
 });
