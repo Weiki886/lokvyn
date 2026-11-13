@@ -90,6 +90,12 @@ const chinese: Record<string, string> = {
   Disconnected: "未连接",
   Version: "服务版本",
   "Local Ollama": "本地 Ollama",
+  "Service available": "服务可用",
+  "Ollama library": "Ollama 模型库",
+  "Model directory": "模型目录",
+  "Model family": "模型系列",
+  Focus: "适用方向",
+  "{shown} of {total} model families": "{shown} / {total} 个模型系列",
   "Development build": "开发版本",
   "Find your next model": "发现适合你的模型",
   "Explore model families from the Ollama library.":

@@ -5,13 +5,17 @@ import {
   Box,
   Check,
   CircleDashed,
+  Code2,
   Download,
   KeyRound,
   MessageSquare,
+  Network,
+  ScanEye,
   Search,
   Server,
 } from "lucide-react";
 import { translate, type Locale } from "./i18n";
+import { Select, TextArea, TextInput } from "./FormControls";
 
 export type View =
   | "Discover"
@@ -25,47 +29,48 @@ export type View =
 const catalog = [
   {
     name: "qwen3",
-    mark: "Q",
     description: "Reasoning and multilingual conversation.",
     capability: "Chat",
     tags: "Reasoning · Multilingual",
   },
   {
     name: "gemma3",
-    mark: "G",
     description: "Text and image understanding in one family.",
     capability: "Vision",
     tags: "Vision · Multimodal",
   },
   {
     name: "llama3.2",
-    mark: "L",
     description: "Compact models for everyday language tasks.",
     capability: "Chat",
     tags: "Chat · Lightweight",
   },
   {
     name: "deepseek-r1",
-    mark: "D",
     description: "A model family focused on reasoning.",
     capability: "Chat",
     tags: "Reasoning · Chat",
   },
   {
     name: "qwen2.5-coder",
-    mark: "Q",
     description: "Code generation, completion and understanding.",
     capability: "Code",
     tags: "Code · Completion",
   },
   {
     name: "nomic-embed-text",
-    mark: "N",
     description: "Text embeddings for search and retrieval.",
     capability: "Embedding",
     tags: "Embedding · Retrieval",
   },
 ];
+
+const capabilityIcons = {
+  Chat: MessageSquare,
+  Vision: ScanEye,
+  Code: Code2,
+  Embedding: Network,
+};
 
 function ModelSelector({
   models,
@@ -80,18 +85,15 @@ function ModelSelector({
 }) {
   const t = (source: string) => translate(locale, source);
   return (
-    <select
-      aria-label={t("Select model")}
+    <Select
+      label={t("Select model")}
       value={model}
-      onChange={(event) => setModel(event.target.value)}
-    >
-      <option value="">{t("Select an installed model")}</option>
-      {models.map((name) => (
-        <option key={name} value={name}>
-          {name}
-        </option>
-      ))}
-    </select>
+      onChange={setModel}
+      options={[
+        { value: "", label: t("Select an installed model") },
+        ...models.map((name) => ({ value: name, label: name })),
+      ]}
+    />
   );
 }
 
@@ -129,17 +131,19 @@ export default function WorkspaceViews({
     );
     return (
       <section className="discover-view">
-        <div className="view-heading">
-          <div>
-            <h2>{t("Find your next model")}</h2>
-            <p>{t("Explore model families from the Ollama library.")}</p>
-          </div>
+        <div className="directory-heading">
+          <h2>{t("Ollama library")}</h2>
+          <span className="directory-count" aria-live="polite">
+            {t("{shown} of {total} model families")
+              .replace("{shown}", String(filtered.length))
+              .replace("{total}", String(catalog.length))}
+          </span>
           <span className="preview-label">{t("Catalog preview")}</span>
         </div>
         <div className="filter-bar">
           <label className="search-field">
             <Search size={16} />
-            <input
+            <TextInput
               type="search"
               aria-label={t("Search catalog preview")}
               placeholder={t("Search model families...")}
@@ -147,48 +151,83 @@ export default function WorkspaceViews({
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <select
-            aria-label={t("Capability")}
+          <Select
+            label={t("Capability")}
             value={capability}
-            onChange={(event) => setCapability(event.target.value)}
-          >
-            {["All capabilities", "Chat", "Vision", "Code", "Embedding"].map(
-              (value) => (
-                <option key={value} value={value}>
-                  {t(value)}
-                </option>
-              ),
-            )}
-          </select>
+            onChange={setCapability}
+            options={[
+              "All capabilities",
+              "Chat",
+              "Vision",
+              "Code",
+              "Embedding",
+            ].map((value) => ({ value, label: t(value) }))}
+          />
         </div>
         <p className="quiet-note">
           {t(
             "Selected examples only. Live catalog and downloads are not connected.",
           )}
         </p>
-        <div className="catalog-grid">
-          {filtered.map((model) => (
-            <article className="catalog-item" key={model.name}>
-              <div className="catalog-identity">
-                <span className="family-mark">{model.mark}</span>
-                <span className="capability">{t(model.capability)}</span>
-              </div>
-              <h3>{model.name}</h3>
-              <p>{t(model.description)}</p>
-              <div className="catalog-bottom">
-                <span>{t(model.tags)}</span>
-                <button
-                  className="icon-button"
-                  aria-label={`${t("Download")} ${model.name}`}
-                  title={t("Downloads not connected")}
-                  disabled
-                >
-                  <ArrowDownToLine size={17} />
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+        <table className="model-directory" aria-label={t("Model directory")}>
+          <thead>
+            <tr>
+              <th scope="col">{t("Model family")}</th>
+              <th scope="col" className="directory-focus">
+                {t("Focus")}
+              </th>
+              <th scope="col" className="directory-capability">
+                {t("Capability")}
+              </th>
+              <th scope="col" className="directory-action">
+                {t("Download")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((model) => {
+              const Icon =
+                capabilityIcons[
+                  model.capability as keyof typeof capabilityIcons
+                ];
+              return (
+                <tr key={model.name}>
+                  <th scope="row">
+                    <div className="directory-model">
+                      <span
+                        className={`model-symbol capability-${model.capability.toLowerCase()}`}
+                      >
+                        <Icon size={20} strokeWidth={1.7} />
+                      </span>
+                      <div>
+                        <strong>{model.name}</strong>
+                        <p>{t(model.description)}</p>
+                      </div>
+                    </div>
+                  </th>
+                  <td className="directory-focus">{t(model.tags)}</td>
+                  <td className="directory-capability">
+                    <span
+                      className={`capability capability-${model.capability.toLowerCase()}`}
+                    >
+                      {t(model.capability)}
+                    </span>
+                  </td>
+                  <td className="directory-action">
+                    <button
+                      className="icon-button"
+                      aria-label={`${t("Download")} ${model.name}`}
+                      title={t("Downloads not connected")}
+                      disabled
+                    >
+                      <ArrowDownToLine size={17} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
         {filtered.length === 0 && (
           <div className="empty-state">
             <Search size={30} />
@@ -239,7 +278,7 @@ export default function WorkspaceViews({
           <p>{t("Chat generation is not connected yet.")}</p>
         </div>
         <div className="composer">
-          <textarea
+          <TextArea
             aria-label={t("Message")}
             placeholder={t("Message your local model...")}
             disabled
@@ -380,17 +419,18 @@ export default function WorkspaceViews({
       </div>
       <div className="settings-section language-section">
         <h3>{t("Language")}</h3>
-        <label className="language-setting">
+        <div className="language-setting">
           <span>{t("Language")}</span>
-          <select
-            aria-label={t("Language")}
+          <Select
+            label={t("Language")}
             value={locale}
-            onChange={(event) => setLocale(event.target.value as Locale)}
-          >
-            <option value="en">English</option>
-            <option value="zh-CN">简体中文</option>
-          </select>
-        </label>
+            onChange={(value) => setLocale(value as Locale)}
+            options={[
+              { value: "en", label: "English" },
+              { value: "zh-CN", label: "简体中文" },
+            ]}
+          />
+        </div>
       </div>
     </section>
   );

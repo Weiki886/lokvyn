@@ -1,0 +1,115 @@
+.form-input,
+.form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  transition:
+    border-color 120ms,
+    box-shadow 120ms,
+    background 120ms;
+}
+.form-input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.form-input:hover:not(:disabled),
+.form-select:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+.form-input:focus-visible,
+.form-select:focus-visible,
+.form-select[aria-expanded="true"] {
+  border-color: var(--brand);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.form-input:disabled,
+.form-select:disabled {
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+.form-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-weight: 500;
+}
+.form-select > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form-select > svg {
+  flex: 0 0 auto;
+  color: var(--brand);
+}
+.form-select[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+.select-menu {
+  position: fixed;
+  z-index: 1000;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 5px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px rgb(20 59 43 / 12%);
+  font-size: 12px;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.select-option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.select-option > svg {
+  flex: 0 0 auto;
+}
+.select-option[aria-selected="true"] {
+  color: var(--brand-dark);
+  font-weight: 600;
+}
+.select-option.active {
+  color: var(--brand-dark);
+  background: var(--brand-soft);
+}
+.form-textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+}
+@media (prefers-reduced-motion: reduce) {
+  .form-input,
+  .form-select {
+    transition: none;
+  }
+}
