@@ -96,15 +96,6 @@ button:disabled {
 .brand strong {
   font-size: 15px;
 }
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  color: #fff;
-  background: var(--brand);
-  border-radius: 6px;
-}
 .brand-tag {
   color: var(--muted);
   font-size: 11px;
@@ -816,9 +807,6 @@ h1 {
   color: var(--ink);
   font-weight: 600;
 }
-.footer-brand svg {
-  color: var(--brand);
-}
 .version {
   margin-left: 7px;
   color: var(--muted);
@@ -1150,11 +1138,8 @@ h1 {
   grid-template-columns: 60px minmax(0, 1fr);
 }
 .sidebar-collapsed .brand {
-  width: 38px;
-  flex-basis: 38px;
+  display: none;
 }
-.sidebar-collapsed .brand > strong,
-.sidebar-collapsed .brand-tag,
 .sidebar-collapsed .nav-label,
 .sidebar-collapsed .nav-item > span,
 .sidebar-collapsed .nav-item small,
@@ -1244,11 +1229,6 @@ h1 {
     padding: 0 8px;
   }
   .brand {
-    width: 34px;
-    flex-basis: 34px;
-  }
-  .brand > strong,
-  .brand-tag {
     display: none;
   }
   .topbar-context {
