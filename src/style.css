@@ -1140,13 +1140,27 @@ h1 {
 .sidebar-collapsed .brand {
   display: none;
 }
-.sidebar-collapsed .nav-label,
 .sidebar-collapsed .nav-item > span,
 .sidebar-collapsed .nav-item small,
 .sidebar-collapsed .service-summary,
 .sidebar-collapsed .service-heading strong,
 .sidebar-collapsed .service-heading .status-dot {
   display: none;
+}
+.sidebar-collapsed .nav-label {
+  position: relative;
+  visibility: hidden;
+}
+.sidebar-collapsed .nav-label::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 1px;
+  background: var(--line-strong);
+  content: "";
+  transform: translate(-50%, -50%);
+  visibility: visible;
 }
 .sidebar-collapsed .sidebar {
   align-items: center;
@@ -1241,13 +1255,27 @@ h1 {
   .sidebar {
     padding: 10px 6px;
   }
-  .nav-label,
   .nav-item > span,
   .nav-item small,
   .service-summary,
   .service-heading strong,
   .service-heading .status-dot {
     display: none;
+  }
+  .nav-label {
+    position: relative;
+    visibility: hidden;
+  }
+  .nav-label::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 1px;
+    background: var(--line-strong);
+    content: "";
+    transform: translate(-50%, -50%);
+    visibility: visible;
   }
   .nav-group + .nav-group {
     margin-top: 14px;
