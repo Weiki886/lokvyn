@@ -296,9 +296,6 @@ export default function App() {
     <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">
-            <Box size={21} />
-          </span>
           <strong>Lokvyn</strong>
           <span className="brand-tag">{t("LOCAL AI")}</span>
         </div>
@@ -847,7 +844,6 @@ export default function App() {
       </main>
       <footer className="statusbar">
         <span className="footer-brand">
-          <Box size={13} />
           Lokvyn <span>{appVersion || t("Version unavailable")}</span>
         </span>
         <span className="connection" role="status">
