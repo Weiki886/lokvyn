@@ -1,6 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
+
+static OLLAMA_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, PartialEq)]
 struct OllamaModel {
@@ -187,6 +194,80 @@ async fn check_version(url: &str, timeout: Duration) -> Result<String, &'static 
         .ok_or("unavailable")
 }
 
+fn ollama_executables() -> Vec<OsString> {
+    let mut paths = vec![OsString::from("ollama")];
+    #[cfg(target_os = "macos")]
+    paths.extend([
+        OsString::from("/opt/homebrew/bin/ollama"),
+        OsString::from("/usr/local/bin/ollama"),
+        OsString::from("/Applications/Ollama.app/Contents/Resources/ollama"),
+    ]);
+    #[cfg(target_os = "windows")]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(
+            std::path::PathBuf::from(local_app_data)
+                .join("Programs/Ollama/ollama.exe")
+                .into_os_string(),
+        );
+    }
+    paths
+}
+
+async fn ensure_ollama(
+    url: &str,
+    executables: &[OsString],
+    timeout: Duration,
+) -> Result<String, &'static str> {
+    let _guard = OLLAMA_START_LOCK.lock().await;
+    if let Ok(version) = check_version(url, Duration::from_millis(500)).await {
+        return Ok(version);
+    }
+
+    let mut child = executables
+        .iter()
+        .find_map(|path| {
+            let mut command = Command::new(path);
+            command
+                .arg("serve")
+                .env("OLLAMA_HOST", "127.0.0.1:11434")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000);
+            }
+            command.spawn().ok()
+        })
+        .ok_or("unavailable")?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(version) = check_version(url, Duration::from_millis(500)).await {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(version);
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => return Err("unavailable"),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("unavailable");
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("unavailable");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 async fn fetch_models(url: &str, timeout: Duration) -> Result<Vec<OllamaModel>, &'static str> {
     let value = get_json(url, timeout, 4 * 1024 * 1024).await?;
     value
@@ -311,9 +392,13 @@ async fn ollama_unload_model(model_name: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn ollama_connection() -> Result<String, String> {
-    check_version("http://127.0.0.1:11434/api/version", Duration::from_secs(3))
-        .await
-        .map_err(str::to_owned)
+    ensure_ollama(
+        "http://127.0.0.1:11434/api/version",
+        &ollama_executables(),
+        Duration::from_secs(15),
+    )
+    .await
+    .map_err(str::to_owned)
 }
 
 #[cfg(test)]
@@ -325,6 +410,53 @@ mod tests {
         thread,
         time::Duration,
     };
+
+    #[test]
+    fn existing_service_is_reused_without_launching_a_process() {
+        let url = server(
+            "HTTP/1.1 200 OK\r\nContent-Length: 19\r\n\r\n{\"version\":\"0.1.0\"}",
+            Duration::ZERO,
+        );
+        let result = tauri::async_runtime::block_on(ensure_ollama(
+            &url,
+            &["/nonexistent/lokvyn-ollama".into()],
+            Duration::from_millis(300),
+        ));
+        assert_eq!(result.unwrap(), "0.1.0");
+    }
+
+    #[test]
+    fn missing_executable_returns_an_error_and_can_be_retried() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/api/version", listener.local_addr().unwrap());
+        drop(listener);
+        for _ in 0..2 {
+            assert!(tauri::async_runtime::block_on(ensure_ollama(
+                &url,
+                &["/nonexistent/lokvyn-ollama".into()],
+                Duration::from_millis(100),
+            ))
+            .is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exited_process_and_startup_timeout_return_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/api/version", listener.local_addr().unwrap());
+        drop(listener);
+        for executable in ["/usr/bin/false", "/usr/bin/yes"] {
+            let start = Instant::now();
+            assert!(tauri::async_runtime::block_on(ensure_ollama(
+                &url,
+                &[executable.into()],
+                Duration::from_millis(300),
+            ))
+            .is_err());
+            assert!(start.elapsed() < Duration::from_secs(3));
+        }
+    }
 
     fn server(response: impl Into<String>, delay: Duration) -> String {
         let response = response.into();
