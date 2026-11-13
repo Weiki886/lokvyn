@@ -1,5 +1,7 @@
 # White and Green Controls
 
+> Superseded for colors by [Blue and White Theme](blue-white-theme.md).
+
 Issue: #21
 
 ## Design

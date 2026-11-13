@@ -10,12 +10,12 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
   transition:
-    border-color 120ms,
-    box-shadow 120ms,
-    background 120ms;
+    border-color var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease),
+    background-color var(--fast) var(--ease);
 }
 .form-input::placeholder {
   color: var(--muted);
@@ -23,7 +23,7 @@
 }
 .form-input:hover:not(:disabled),
 .form-select:hover:not(:disabled) {
-  border-color: var(--brand);
+  border-color: var(--line-strong);
 }
 .form-input:focus-visible,
 .form-select:focus-visible,
@@ -64,6 +64,8 @@
 }
 .select-menu {
   position: fixed;
+  transform-origin: top center;
+  animation: menu-enter 140ms var(--ease) both;
   z-index: 1000;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -73,8 +75,8 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 7px;
-  box-shadow: 0 8px 26px rgb(20 59 43 / 12%);
-  font-size: 12px;
+  box-shadow: 0 8px 26px rgb(16 32 64 / 14%);
+  font-size: 13px;
 }
 .select-option {
   display: flex;
@@ -86,6 +88,9 @@
   border-radius: 4px;
   cursor: pointer;
   line-height: 1.5;
+  transition:
+    background-color var(--fast) var(--ease),
+    color var(--fast) var(--ease);
 }
 .select-option > span {
   min-width: 0;
@@ -107,9 +112,19 @@
   width: 100%;
   resize: vertical;
 }
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .form-input,
-  .form-select {
+  .form-select,
+  .select-option {
     transition: none;
+  }
+  .select-menu {
+    animation: none;
   }
 }
