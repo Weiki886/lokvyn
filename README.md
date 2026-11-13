@@ -2,7 +2,7 @@
 
 Lokvyn is a desktop GUI focused on local Ollama. It checks the connection, lists installed and running models with refresh and retry, shows available model sizes and update times, displays read-only model metadata and configuration, and loads or unloads installed models in Ollama memory. The desktop workspace also includes clearly marked preview views for model discovery, downloads, chat, and API access; these do not yet perform those operations. Model rename, duplicate, deletion, chat generation, downloads, API key management, history, remote endpoints, and other services are not implemented.
 
-The application connects only to `127.0.0.1:11434` and does not start Ollama. Start Ollama separately to see the connected state. The address is not configurable.
+The application connects only to `127.0.0.1:11434`. When Ollama is installed and the service is not already running, Lokvyn starts `ollama serve` in the background without opening the Ollama GUI. An existing service is reused. If Ollama is unavailable, install it and retry from the application. The address is not configurable.
 
 In Settings, choose English or Simplified Chinese. The interface updates immediately and remembers the selection on this computer using the webview's local storage. English is the initial default. Model names and Ollama configuration values retain their original content. Settings and the status bar show the application version from Tauri metadata, separately from the connected Ollama server version.
 
@@ -15,7 +15,7 @@ npm ci
 npm run tauri dev
 ```
 
-The desktop development command starts a local Vite server and opens the Tauri window. It does not require Ollama to be running.
+The desktop development command starts a local Vite server and opens the Tauri window. Ollama must be installed for model features; Lokvyn attempts to start its service automatically.
 
 ## Checks
 
