@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   Box,
@@ -22,7 +23,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import WorkspaceViews, { type View } from "./WorkspaceViews";
+import WorkspaceViews, { type CatalogModel, type View } from "./WorkspaceViews";
 import { TextInput } from "./FormControls";
 import { readLocale, saveLocale, translate, type Locale } from "./i18n";
 
@@ -48,6 +49,21 @@ type RunningModels =
   | { state: "loading" }
   | { state: "loaded"; models: RunningModel[] }
   | { state: "error" };
+type Catalog = {
+  state: "idle" | "loading" | "loaded" | "error";
+  models: CatalogModel[];
+  page: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: boolean;
+};
+type DownloadTask = {
+  model: string;
+  state: "downloading" | "completed" | "error";
+  message: string;
+  completed: number | null;
+  total: number | null;
+};
 type ModelDetails = {
   format: string | null;
   family: string | null;
@@ -121,6 +137,20 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [details, setDetails] = useState<Details>({ state: "loading" });
   const [detailsAttempt, setDetailsAttempt] = useState(0);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [catalogSort, setCatalogSort] = useState("popular");
+  const [catalogCapability, setCatalogCapability] = useState("");
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const [catalog, setCatalog] = useState<Catalog>({
+    state: "idle",
+    models: [],
+    page: 0,
+    hasMore: false,
+    loadingMore: false,
+    loadMoreError: false,
+  });
+  const [downloads, setDownloads] = useState<DownloadTask[]>([]);
+  const catalogRequestId = useRef(0);
 
   useEffect(() => {
     saveLocale(locale);
@@ -207,6 +237,88 @@ export default function App() {
     };
   }, [selectedModel, detailsAttempt]);
 
+  useEffect(() => {
+    if (view !== "Discover") return;
+    let active = true;
+    const requestId = ++catalogRequestId.current;
+    const timer = window.setTimeout(() => {
+      setCatalog((current) => ({
+        ...current,
+        state: "loading",
+        models: [],
+        page: 0,
+        hasMore: false,
+        loadingMore: false,
+        loadMoreError: false,
+      }));
+      invoke<{
+        models: CatalogModel[];
+        page: number;
+        hasMore: boolean;
+      }>("ollama_catalog", {
+        query: catalogQuery,
+        page: 1,
+        sort: catalogSort,
+        capability: catalogCapability,
+      }).then(
+        (result) => {
+          if (active && catalogRequestId.current === requestId)
+            setCatalog({
+              state: "loaded",
+              models: result.models,
+              page: result.page,
+              hasMore: result.hasMore,
+              loadingMore: false,
+              loadMoreError: false,
+            });
+        },
+        () => {
+          if (active && catalogRequestId.current === requestId)
+            setCatalog((current) => ({ ...current, state: "error" }));
+        },
+      );
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [view, catalogQuery, catalogSort, catalogCapability, catalogAttempt]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<{
+      model: string;
+      status: "downloading" | "complete";
+      message: string;
+      completed: number | null;
+      total: number | null;
+    }>("ollama-pull-progress", (event) => {
+      const progress = event.payload;
+      setDownloads((current) =>
+        current.map((task) =>
+          task.model === progress.model
+            ? {
+                ...task,
+                state:
+                  progress.status === "complete" ? "completed" : "downloading",
+                message: progress.message,
+                completed: progress.completed,
+                total: progress.total,
+              }
+            : task,
+        ),
+      );
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   function refreshModels() {
     setModels({ state: "loading" });
     setRefresh((n) => n + 1);
@@ -216,6 +328,84 @@ export default function App() {
     setRunningModels({ state: "loading" });
     setActionError(false);
     setRunningRefresh((n) => n + 1);
+  }
+
+  async function loadMoreCatalog() {
+    if (catalog.state !== "loaded" || !catalog.hasMore || catalog.loadingMore)
+      return;
+    const nextPage = catalog.page + 1;
+    const requestId = catalogRequestId.current;
+    setCatalog((current) => ({
+      ...current,
+      loadingMore: true,
+      loadMoreError: false,
+    }));
+    try {
+      const result = await invoke<{
+        models: CatalogModel[];
+        page: number;
+        hasMore: boolean;
+      }>("ollama_catalog", {
+        query: catalogQuery,
+        page: nextPage,
+        sort: catalogSort,
+        capability: catalogCapability,
+      });
+      if (requestId !== catalogRequestId.current) return;
+      setCatalog((current) => ({
+        ...current,
+        models: [
+          ...current.models,
+          ...result.models.filter(
+            (model) =>
+              !current.models.some((loaded) => loaded.name === model.name),
+          ),
+        ],
+        page: result.page,
+        hasMore: result.hasMore,
+        loadingMore: false,
+      }));
+    } catch {
+      if (requestId !== catalogRequestId.current) return;
+      setCatalog((current) => ({
+        ...current,
+        loadingMore: false,
+        loadMoreError: true,
+      }));
+    }
+  }
+
+  async function downloadModel(model: string) {
+    if (downloads.some((task) => task.state === "downloading")) return;
+    setDownloads((current) => [
+      {
+        model,
+        state: "downloading",
+        message: t("Starting download"),
+        completed: null,
+        total: null,
+      },
+      ...current.filter((task) => task.model !== model),
+    ]);
+    try {
+      await invoke("ollama_pull_model", { modelName: model });
+      setDownloads((current) =>
+        current.map((task) =>
+          task.model === model
+            ? { ...task, state: "completed", message: t("Download complete") }
+            : task,
+        ),
+      );
+      refreshModels();
+    } catch {
+      setDownloads((current) =>
+        current.map((task) =>
+          task.model === model
+            ? { ...task, state: "error", message: t("Download failed") }
+            : task,
+        ),
+      );
+    }
   }
 
   async function changeModelState(name: string, loaded: boolean) {
@@ -681,6 +871,17 @@ export default function App() {
                 locale={locale}
                 setLocale={setLocale}
                 appVersion={appVersion}
+                catalog={catalog}
+                catalogQuery={catalogQuery}
+                setCatalogQuery={setCatalogQuery}
+                catalogSort={catalogSort}
+                setCatalogSort={setCatalogSort}
+                catalogCapability={catalogCapability}
+                setCatalogCapability={setCatalogCapability}
+                retryCatalog={() => setCatalogAttempt((attempt) => attempt + 1)}
+                loadMoreCatalog={loadMoreCatalog}
+                downloads={downloads}
+                startDownload={downloadModel}
               />
             )}
           </section>
