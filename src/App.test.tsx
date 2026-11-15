@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,10 +10,12 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import App from "./App";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 const ollamaModel = (name: string) => ({
   name,
   size: null,
@@ -21,8 +24,15 @@ const ollamaModel = (name: string) => ({
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(getVersion).mockResolvedValue("0.1.0");
+  vi.mocked(listen).mockResolvedValue(() => {});
   vi.mocked(invoke).mockImplementation((command) =>
-    Promise.resolve(command === "ollama_connection" ? "0.1.0" : []),
+    Promise.resolve(
+      command === "ollama_connection"
+        ? "0.1.0"
+        : command === "ollama_catalog"
+          ? { models: [], page: 1, hasMore: false }
+          : [],
+    ),
   );
 });
 afterEach(() => {
@@ -435,6 +445,7 @@ describe("desktop workspace", () => {
             "ollama_connection",
             "ollama_models",
             "ollama_running_models",
+            "ollama_catalog",
           ].includes(name),
         ),
     ).toBe(true);
@@ -471,34 +482,72 @@ describe("desktop workspace", () => {
     expect(screen.getByRole("button", { name: "beta:latest" })).toBeTruthy();
   });
 
-  it("filters the catalog preview and keeps chat and key creation disabled", async () => {
+  it("loads live catalog results, searches remotely, and shows installed state", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_models"
+            ? [ollamaModel("qwen3:8b")]
+            : command === "ollama_catalog"
+              ? {
+                  models: [
+                    {
+                      name: "qwen3",
+                      description: "A reasoning model family.",
+                      capabilities: ["thinking", "tools"],
+                      downloads: "25.8M",
+                      sizes: ["8b", "14b"],
+                    },
+                    {
+                      name: "gemma4",
+                      description: "An open model family.",
+                      capabilities: ["vision"],
+                      downloads: "2.1M",
+                      sizes: ["4b"],
+                    },
+                  ],
+                  page: 1,
+                  hasMore: true,
+                }
+              : [],
+      ),
+    );
     render(<App />);
     fireEvent.click(
       screen.getByRole("button", { name: "Navigate to Discover" }),
     );
-    expect(screen.getByText("Catalog preview")).toBeTruthy();
-    const directory = screen.getByRole("table", { name: "Model directory" });
-    expect(within(directory).getAllByRole("row")).toHaveLength(7);
-    for (const heading of ["Model family", "Focus", "Capability", "Download"]) {
+    expect(await screen.findByText("qwen3")).toBeTruthy();
+    expect(screen.getByText("gemma4")).toBeTruthy();
+    expect(screen.getByText("Installed")).toBeTruthy();
+    expect(screen.getByText("25.8M")).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    fireEvent.change(search, { target: { value: "qwen" } });
+    await waitFor(() => {
       expect(
-        within(directory).getByRole("columnheader", { name: heading }),
-      ).toBeTruthy();
-    }
-    for (const action of within(directory).getAllByRole("button")) {
-      expect(action.hasAttribute("disabled")).toBe(true);
-    }
-    expect(screen.getByText("6 of 6 model families")).toBeTruthy();
-    fireEvent.change(
-      screen.getByRole("searchbox", { name: "Search catalog preview" }),
-      { target: { value: "qwen" } },
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([name, args]) =>
+              name === "ollama_catalog" &&
+              (args as { query?: string }).query === "qwen",
+          ),
+      ).toBe(true);
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Load more models" }),
     );
-    expect(screen.getByText("qwen3")).toBeTruthy();
-    expect(screen.queryByText("gemma3")).toBeNull();
-    expect(screen.getByText("2 of 6 model families")).toBeTruthy();
-    fireEvent.click(screen.getByRole("combobox", { name: "Capability" }));
-    fireEvent.click(screen.getByRole("option", { name: "Embedding" }));
-    expect(screen.getByText("No matching models")).toBeTruthy();
-    expect(screen.getByText("0 of 6 model families")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([name, args]) =>
+              name === "ollama_catalog" &&
+              (args as { page?: number }).page === 2,
+          ),
+      ).toBe(true),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
     expect(
       screen
@@ -515,6 +564,149 @@ describe("desktop workspace", () => {
     ).toBe(true);
     expect(screen.getByText("Gateway not configured")).toBeTruthy();
     await screen.findByText("Connected");
+  });
+
+  it("shows a recoverable catalog error", async () => {
+    let fail = true;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return fail
+          ? Promise.reject("unavailable")
+          : Promise.resolve({
+              models: [],
+              page: 1,
+              hasMore: false,
+            });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(
+      await screen.findByText("Could not load the Ollama catalog"),
+    ).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry catalog" }));
+    expect(await screen.findByText("No matching models")).toBeTruthy();
+  });
+
+  it("pulls a selected catalog model and shows its completed download", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "qwen3",
+                    description: "Reasoning model.",
+                    capabilities: ["thinking"],
+                    downloads: "25.8M",
+                    sizes: ["8b"],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([name, args]) =>
+              name === "ollama_pull_model" &&
+              (args as { modelName?: string }).modelName === "qwen3",
+          ),
+      ).toBe(true),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Downloads" }),
+    );
+    expect(await screen.findByText("Download complete")).toBeTruthy();
+    expect(screen.getByText("completed")).toBeTruthy();
+  });
+
+  it("renders streamed Ollama pull progress in Downloads", async () => {
+    let reportProgress:
+      | ((payload: {
+          model: string;
+          status: "downloading" | "complete";
+          message: string;
+          completed: number | null;
+          total: number | null;
+        }) => void)
+      | undefined;
+    vi.mocked(listen).mockImplementation((_event, handler) => {
+      reportProgress = (payload) =>
+        (handler as (event: { payload: typeof payload }) => void)({ payload });
+      return Promise.resolve(() => {});
+    });
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "qwen3",
+                    description: "Reasoning model.",
+                    capabilities: ["thinking"],
+                    downloads: "25.8M",
+                    sizes: ["8b"],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === "ollama_pull_model"),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
+    act(() =>
+      reportProgress?.({
+        model: "qwen3",
+        status: "downloading",
+        message: "pulling model layers",
+        completed: 3,
+        total: 10,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Downloads" }),
+    );
+    expect(await screen.findByText("3 B / 10 B")).toBeTruthy();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "30",
+    );
   });
 
   it("summarizes actual local model counts in the sidebar", async () => {
@@ -662,15 +854,47 @@ describe("language and application version settings", () => {
 
   it("keeps catalog filters working with translated options", async () => {
     localStorage.setItem("lokvyn.locale", "zh-CN");
+    vi.mocked(invoke).mockImplementation((command, args) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "qwen3",
+                    description: "推理与多语言对话。",
+                    capabilities: ["thinking"],
+                    downloads: "25.8M",
+                    sizes: ["8b"],
+                  },
+                  {
+                    name: "nomic-embed-text",
+                    description: "用于搜索与检索的文本向量。",
+                    capabilities: ["embedding"],
+                    downloads: "2.1M",
+                    sizes: ["latest"],
+                  },
+                ].filter((model) =>
+                  (args as { capability?: string }).capability === "embedding"
+                    ? model.name === "nomic-embed-text"
+                    : true,
+                ),
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "导航到发现模型" }));
     expect(screen.getByRole("table", { name: "模型目录" })).toBeTruthy();
-    expect(screen.getByText("6 / 6 个模型系列")).toBeTruthy();
+    expect(await screen.findByText("qwen3")).toBeTruthy();
+    expect(screen.getByText("nomic-embed-text")).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "能力类型" }));
     fireEvent.click(screen.getByRole("option", { name: "向量嵌入" }));
+    await waitFor(() => expect(screen.queryByText("qwen3")).toBeNull());
     expect(screen.getByText("nomic-embed-text")).toBeTruthy();
-    expect(screen.queryByText("qwen3")).toBeNull();
-    expect(screen.getByText("1 / 6 个模型系列")).toBeTruthy();
     expect(screen.getByText("用于搜索与检索的文本向量。")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "下载 nomic-embed-text" }),

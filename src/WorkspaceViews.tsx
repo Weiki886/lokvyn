@@ -5,12 +5,9 @@ import {
   Box,
   Check,
   CircleDashed,
-  Code2,
   Download,
   KeyRound,
   MessageSquare,
-  Network,
-  ScanEye,
   Search,
   Server,
 } from "lucide-react";
@@ -26,51 +23,42 @@ export type View =
   | "API access"
   | "Settings";
 
-const catalog = [
-  {
-    name: "qwen3",
-    description: "Reasoning and multilingual conversation.",
-    capability: "Chat",
-    tags: "Reasoning · Multilingual",
-  },
-  {
-    name: "gemma3",
-    description: "Text and image understanding in one family.",
-    capability: "Vision",
-    tags: "Vision · Multimodal",
-  },
-  {
-    name: "llama3.2",
-    description: "Compact models for everyday language tasks.",
-    capability: "Chat",
-    tags: "Chat · Lightweight",
-  },
-  {
-    name: "deepseek-r1",
-    description: "A model family focused on reasoning.",
-    capability: "Chat",
-    tags: "Reasoning · Chat",
-  },
-  {
-    name: "qwen2.5-coder",
-    description: "Code generation, completion and understanding.",
-    capability: "Code",
-    tags: "Code · Completion",
-  },
-  {
-    name: "nomic-embed-text",
-    description: "Text embeddings for search and retrieval.",
-    capability: "Embedding",
-    tags: "Embedding · Retrieval",
-  },
-];
-
-const capabilityIcons = {
-  Chat: MessageSquare,
-  Vision: ScanEye,
-  Code: Code2,
-  Embedding: Network,
+export type CatalogModel = {
+  name: string;
+  description: string;
+  capabilities: string[];
+  downloads: string | null;
+  sizes: string[];
 };
+
+type Catalog = {
+  state: "idle" | "loading" | "loaded" | "error";
+  models: CatalogModel[];
+  page: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: boolean;
+};
+
+type DownloadTask = {
+  model: string;
+  state: "downloading" | "completed" | "error";
+  message: string;
+  completed: number | null;
+  total: number | null;
+};
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit += 1;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
 
 function ModelSelector({
   models,
@@ -106,6 +94,17 @@ export default function WorkspaceViews({
   locale,
   setLocale,
   appVersion,
+  catalog,
+  catalogQuery,
+  setCatalogQuery,
+  catalogSort,
+  setCatalogSort,
+  catalogCapability,
+  setCatalogCapability,
+  retryCatalog,
+  loadMoreCatalog,
+  downloads,
+  startDownload,
 }: {
   view: View;
   models: string[];
@@ -115,69 +114,88 @@ export default function WorkspaceViews({
   locale: Locale;
   setLocale: (locale: Locale) => void;
   appVersion: string;
+  catalog: Catalog;
+  catalogQuery: string;
+  setCatalogQuery: (query: string) => void;
+  catalogSort: string;
+  setCatalogSort: (sort: string) => void;
+  catalogCapability: string;
+  setCatalogCapability: (capability: string) => void;
+  retryCatalog: () => void;
+  loadMoreCatalog: () => void;
+  downloads: DownloadTask[];
+  startDownload: (model: string) => void;
 }) {
   const t = (source: string) => translate(locale, source);
-  const [query, setQuery] = useState("");
-  const [capability, setCapability] = useState("All capabilities");
   const [apiModel, setApiModel] = useState("");
   const selectedChat = models.includes(chatModel) ? chatModel : "";
   const selectedApi = models.includes(apiModel) ? apiModel : "";
 
   if (view === "Discover") {
-    const filtered = catalog.filter(
-      (model) =>
-        model.name.includes(query.trim().toLowerCase()) &&
-        (capability === "All capabilities" || model.capability === capability),
+    const activeDownload = downloads.some(
+      (task) => task.state === "downloading",
     );
     return (
       <section className="discover-view">
         <div className="directory-heading">
           <h2>{t("Ollama library")}</h2>
           <span className="directory-count" aria-live="polite">
-            {t("{shown} of {total} model families")
-              .replace("{shown}", String(filtered.length))
-              .replace("{total}", String(catalog.length))}
+            {catalog.state === "loaded"
+              ? `${catalog.models.length}${catalog.hasMore ? "+" : ""} ${t("models shown")}`
+              : ""}
           </span>
-          <span className="preview-label">{t("Catalog preview")}</span>
+          <span className="preview-label">{t("Live catalog")}</span>
         </div>
         <div className="filter-bar">
           <label className="search-field">
             <Search size={16} />
             <TextInput
               type="search"
-              aria-label={t("Search catalog preview")}
-              placeholder={t("Search model families...")}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              aria-label={t("Search models")}
+              placeholder={t("Search Ollama models...")}
+              value={catalogQuery}
+              onChange={(event) => setCatalogQuery(event.target.value)}
             />
           </label>
           <Select
             label={t("Capability")}
-            value={capability}
-            onChange={setCapability}
+            value={catalogCapability}
+            onChange={setCatalogCapability}
             options={[
-              "All capabilities",
-              "Chat",
-              "Vision",
-              "Code",
-              "Embedding",
-            ].map((value) => ({ value, label: t(value) }))}
+              { value: "", label: t("All capabilities") },
+              ...[
+                "vision",
+                "tools",
+                "thinking",
+                "embedding",
+                "decision",
+                "audio",
+                "local",
+                "cloud",
+              ].map((value) => ({ value, label: t(value) })),
+            ]}
+          />
+          <Select
+            label={t("Sort by")}
+            value={catalogSort}
+            onChange={setCatalogSort}
+            options={["popular", "newest", "name", "price", "context"].map(
+              (value) => ({ value, label: t(value) }),
+            )}
           />
         </div>
         <p className="quiet-note">
-          {t(
-            "Selected examples only. Live catalog and downloads are not connected.",
-          )}
+          {t("Catalog data is provided by the Ollama library.")}
         </p>
         <table className="model-directory" aria-label={t("Model directory")}>
           <thead>
             <tr>
               <th scope="col">{t("Model family")}</th>
-              <th scope="col" className="directory-focus">
-                {t("Focus")}
-              </th>
               <th scope="col" className="directory-capability">
                 {t("Capability")}
+              </th>
+              <th scope="col" className="directory-downloads">
+                {t("Downloads")}
               </th>
               <th scope="col" className="directory-action">
                 {t("Download")}
@@ -185,54 +203,110 @@ export default function WorkspaceViews({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((model) => {
-              const Icon =
-                capabilityIcons[
-                  model.capability as keyof typeof capabilityIcons
-                ];
-              return (
-                <tr key={model.name}>
-                  <th scope="row">
-                    <div className="directory-model">
-                      <span
-                        className={`model-symbol capability-${model.capability.toLowerCase()}`}
-                      >
-                        <Icon size={20} strokeWidth={1.7} />
-                      </span>
-                      <div>
-                        <strong>{model.name}</strong>
-                        <p>{t(model.description)}</p>
+            {catalog.state === "loaded" &&
+              catalog.models.map((model) => {
+                const installed = models.some(
+                  (name) => name.split(":")[0] === model.name,
+                );
+                const task = downloads.find(
+                  (item) => item.model === model.name,
+                );
+                return (
+                  <tr key={model.name}>
+                    <th scope="row">
+                      <div className="directory-model">
+                        <div>
+                          <strong>{model.name}</strong>
+                          <p>{model.description}</p>
+                          {model.sizes.length > 0 && (
+                            <span className="model-size-hints">
+                              {model.sizes.join(" · ")}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </th>
-                  <td className="directory-focus">{t(model.tags)}</td>
-                  <td className="directory-capability">
-                    <span
-                      className={`capability capability-${model.capability.toLowerCase()}`}
-                    >
-                      {t(model.capability)}
-                    </span>
-                  </td>
-                  <td className="directory-action">
-                    <button
-                      className="icon-button"
-                      aria-label={`${t("Download")} ${model.name}`}
-                      title={t("Downloads not connected")}
-                      disabled
-                    >
-                      <ArrowDownToLine size={17} />
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
+                    </th>
+                    <td className="directory-capability">
+                      <div className="capability-list">
+                        {model.capabilities.map((value) => (
+                          <span className="capability" key={value}>
+                            {t(value)}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="directory-downloads">
+                      {model.downloads ?? "-"}
+                    </td>
+                    <td className="directory-action">
+                      {installed ? (
+                        <span className="installed-label">
+                          {t("Installed")}
+                        </span>
+                      ) : (
+                        <button
+                          className="icon-button"
+                          aria-label={`${t("Download")} ${model.name}`}
+                          title={t(
+                            task?.state === "downloading"
+                              ? "Download in progress"
+                              : "Download model",
+                          )}
+                          disabled={
+                            !connected ||
+                            activeDownload ||
+                            task?.state === "downloading"
+                          }
+                          onClick={() => startDownload(model.name)}
+                        >
+                          <ArrowDownToLine size={17} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {catalog.state === "loading" && (
+          <div className="empty-state">
+            <CircleDashed size={26} />
+            <p>{t("Loading Ollama models...")}</p>
+          </div>
+        )}
+        {catalog.state === "error" && (
+          <div className="empty-state">
+            <Server size={26} />
+            <h3>{t("Could not load the Ollama catalog")}</h3>
+            <p>{t("Check your internet connection and retry.")}</p>
+            <button type="button" onClick={retryCatalog}>
+              {t("Retry catalog")}
+            </button>
+          </div>
+        )}
+        {catalog.state === "loaded" && catalog.models.length === 0 && (
           <div className="empty-state">
             <Search size={30} />
             <h3>{t("No matching models")}</h3>
-            <p>{t("Try another name or capability.")}</p>
+            <p>{t("Try another model name or filter.")}</p>
+          </div>
+        )}
+        {catalog.state === "loaded" && catalog.hasMore && (
+          <div className="catalog-pagination">
+            {catalog.loadMoreError && (
+              <span role="status">{t("Could not load more models")}</span>
+            )}
+            <button
+              type="button"
+              onClick={loadMoreCatalog}
+              disabled={catalog.loadingMore}
+            >
+              {catalog.loadingMore
+                ? t("Loading...")
+                : catalog.loadMoreError
+                  ? t("Retry loading more")
+                  : t("Load more models")}
+            </button>
           </div>
         )}
       </section>
@@ -243,18 +317,80 @@ export default function WorkspaceViews({
       <section className="full-view">
         <div className="section-toolbar">
           <span>{t("Download queue")}</span>
-          <span className="preview-label">{t("Not connected")}</span>
+          <span>
+            {downloads.length} {t("tasks")}
+          </span>
         </div>
-        <div className="empty-state">
-          <Download size={40} strokeWidth={1.4} />
-          <h2>{t("No download tasks")}</h2>
-          <p>{t("Model downloads are not connected yet.")}</p>
-          <button disabled>
-            <ArrowDownToLine size={16} />
-            {t("Add download")}
-          </button>
+        {downloads.length === 0 ? (
+          <div className="empty-state">
+            <Download size={40} strokeWidth={1.4} />
+            <h2>{t("No download tasks")}</h2>
+            <p>
+              {t("Download a model from Discover to see its progress here.")}
+            </p>
+          </div>
+        ) : (
+          <ul className="download-list">
+            {downloads.map((task) => (
+              <li className="download-item" key={task.model}>
+                <div className="download-item-heading">
+                  <strong>{task.model}</strong>
+                  <span className={`download-state ${task.state}`}>
+                    {t(task.state)}
+                  </span>
+                </div>
+                <div className="download-item-detail">
+                  <span>{task.message}</span>
+                  {task.total !== null && task.completed !== null && (
+                    <span>
+                      {formatBytes(task.completed)} / {formatBytes(task.total)}
+                    </span>
+                  )}
+                </div>
+                {task.state === "downloading" && (
+                  <div
+                    className="download-progress"
+                    role="progressbar"
+                    aria-label={t("Download progress")}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={
+                      task.total && task.completed !== null
+                        ? Math.round((task.completed / task.total) * 100)
+                        : undefined
+                    }
+                  >
+                    <span
+                      className={task.total ? "" : "indeterminate"}
+                      style={{
+                        width:
+                          task.total && task.completed !== null
+                            ? `${Math.min(100, (task.completed / task.total) * 100)}%`
+                            : undefined,
+                      }}
+                    />
+                  </div>
+                )}
+                {task.state === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => startDownload(task.model)}
+                    disabled={
+                      !connected ||
+                      downloads.some((item) => item.state === "downloading")
+                    }
+                  >
+                    <ArrowDownToLine size={15} />
+                    {t("Retry download")}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="view-footnote">
+          {t("Downloads are stored and managed by Ollama.")}
         </div>
-        <div className="view-footnote">{t("Queue · Progress · Retry")}</div>
       </section>
     );
   if (view === "Chat")

@@ -1,13 +1,144 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use scraper::{Html, Selector};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+use tauri::{AppHandle, Emitter};
 
 static OLLAMA_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static OLLAMA_PULL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+const CATALOG_RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
+const CATALOG_PAGE_SIZE: u32 = 20;
+
+#[derive(Debug, PartialEq)]
+struct CatalogModel {
+    name: String,
+    description: String,
+    capabilities: Vec<String>,
+    downloads: Option<String>,
+    sizes: Vec<String>,
+}
+
+fn selector(value: &str) -> Result<Selector, &'static str> {
+    Selector::parse(value).map_err(|_| "unavailable")
+}
+
+fn element_text(element: scraper::ElementRef<'_>) -> String {
+    element
+        .text()
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'static str> {
+    let document = Html::parse_document(html);
+    let results = selector("#searchresults")?;
+    let root = document.select(&results).next().ok_or("unavailable")?;
+    let count_selector = selector("[data-result-count]")?;
+    let result_count = root
+        .select(&count_selector)
+        .next()
+        .and_then(|element| element.value().attr("data-result-count"))
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or("unavailable")?;
+    if result_count > CATALOG_PAGE_SIZE {
+        return Err("unavailable");
+    }
+    let has_more = root
+        .select(&count_selector)
+        .next()
+        .and_then(|element| element.value().attr("data-has-more"))
+        == Some("true");
+    let card_selector = selector("ul > li > a[href^='/library/']")?;
+    let title_selector = selector("h2")?;
+    let description_selector = selector("p")?;
+    let capability_selector = selector("span[class*='bg-indigo-50']")?;
+    let size_selector = selector("span[class*='bg-[#ddf4ff]']")?;
+    let downloads_selector = selector("div[class*='mt-3'] span[title*='downloads']")?;
+    let models = root
+        .select(&card_selector)
+        .take(CATALOG_PAGE_SIZE as usize)
+        .filter_map(|card| {
+            let href = card.value().attr("href")?;
+            let name = href.strip_prefix("/library/")?.trim_matches('/');
+            if name.is_empty()
+                || name.len() > 128
+                || !name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+            {
+                return None;
+            }
+            card.select(&title_selector).next()?;
+            let description = card
+                .select(&description_selector)
+                .next()
+                .map(element_text)
+                .unwrap_or_default();
+            if description.len() > 1024 {
+                return None;
+            }
+            let capabilities = card
+                .select(&capability_selector)
+                .map(element_text)
+                .filter(|value| !value.is_empty() && value.len() <= 32)
+                .take(16)
+                .collect::<Vec<_>>();
+            let sizes = card
+                .select(&size_selector)
+                .map(element_text)
+                .filter(|value| !value.is_empty() && value.len() <= 16)
+                .take(16)
+                .collect::<Vec<_>>();
+            let downloads = card
+                .select(&downloads_selector)
+                .next()
+                .and_then(|element| element.value().attr("title"))
+                .filter(|value| value.len() <= 64)
+                .map(str::to_owned);
+            Some(CatalogModel {
+                name: name.to_owned(),
+                description,
+                capabilities,
+                downloads,
+                sizes,
+            })
+        })
+        .map(|model| {
+            serde_json::json!({
+                "name": model.name,
+                "description": model.description,
+                "capabilities": model.capabilities,
+                "downloads": model.downloads,
+                "sizes": model.sizes,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "models": models,
+        "page": page,
+        "hasMore": has_more,
+    }))
+}
+
+fn valid_model_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.trim() == value
+        && !value.contains("://")
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._:/-".contains(character))
+}
 
 #[derive(Debug, PartialEq)]
 struct OllamaModel {
@@ -317,6 +448,147 @@ async fn ollama_models() -> Result<Vec<serde_json::Value>, String> {
 }
 
 #[tauri::command]
+async fn ollama_catalog(
+    query: String,
+    page: u32,
+    sort: String,
+    capability: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let query = query.trim();
+    if query.len() > 120 || page == 0 || page > 1000 {
+        return Err("unavailable".into());
+    }
+    let sort = match sort.as_str() {
+        "popular" | "newest" | "name" | "price" | "context" => sort,
+        _ => "popular".into(),
+    };
+    let capability = capability.unwrap_or_default();
+    if !matches!(
+        capability.as_str(),
+        "" | "local"
+            | "cloud"
+            | "tools"
+            | "thinking"
+            | "vision"
+            | "embedding"
+            | "decision"
+            | "audio"
+    ) {
+        return Err("unavailable".into());
+    }
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "unavailable")?;
+    let page = page.to_string();
+    let mut request = client.get("https://ollama.com/search").query(&[
+        ("q", query),
+        ("o", sort.as_str()),
+        ("page", page.as_str()),
+    ]);
+    if !capability.is_empty() {
+        request = request.query(&[("c", capability.as_str())]);
+    }
+    let mut response = request.send().await.map_err(|_| "unavailable")?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > CATALOG_RESPONSE_LIMIT as u64)
+    {
+        return Err("unavailable".into());
+    }
+    let mut html = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "unavailable")? {
+        if chunk.len() > CATALOG_RESPONSE_LIMIT.saturating_sub(html.len()) {
+            return Err("unavailable".into());
+        }
+        html.extend_from_slice(&chunk);
+    }
+    let html = std::str::from_utf8(&html).map_err(|_| "unavailable")?;
+    parse_catalog_page(html, page.parse().map_err(|_| "unavailable")?).map_err(str::to_owned)
+}
+
+fn emit_pull_event(app: &AppHandle, model_name: &str, line: &[u8]) -> Result<bool, String> {
+    if line.is_empty() {
+        return Ok(false);
+    }
+    if line.len() > 16 * 1024 {
+        return Err("unavailable".into());
+    }
+    let value: serde_json::Value = serde_json::from_slice(line).map_err(|_| "unavailable")?;
+    if value
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+    {
+        return Err("unavailable".into());
+    }
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .filter(|status| !status.is_empty() && status.len() <= 256)
+        .ok_or("unavailable")?;
+    let complete = status == "success";
+    let _ = app.emit(
+        "ollama-pull-progress",
+        serde_json::json!({
+            "model": model_name,
+            "status": if complete { "complete" } else { "downloading" },
+            "message": status,
+            "completed": value.get("completed").and_then(serde_json::Value::as_u64),
+            "total": value.get("total").and_then(serde_json::Value::as_u64),
+        }),
+    );
+    Ok(complete)
+}
+
+#[tauri::command]
+async fn ollama_pull_model(app: AppHandle, model_name: String) -> Result<(), String> {
+    if !valid_model_name(&model_name) {
+        return Err("unavailable".into());
+    }
+    let _guard = OLLAMA_PULL_LOCK.lock().await;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(7 * 24 * 60 * 60))
+        .build()
+        .map_err(|_| "unavailable")?;
+    let mut response = client
+        .post("http://127.0.0.1:11434/api/pull")
+        .json(&serde_json::json!({ "model": model_name, "stream": true }))
+        .send()
+        .await
+        .map_err(|_| "unavailable")?;
+    if !response.status().is_success() {
+        return Err("unavailable".into());
+    }
+    let mut pending = Vec::new();
+    let mut complete = false;
+    while let Some(chunk) = response.chunk().await.map_err(|_| "unavailable")? {
+        pending.extend_from_slice(&chunk);
+        if pending.len() > 16 * 1024 && !pending.contains(&b'\n') {
+            return Err("unavailable".into());
+        }
+        while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+            let line = pending.drain(..=newline).collect::<Vec<_>>();
+            complete |= emit_pull_event(&app, &model_name, &line[..line.len() - 1])?;
+        }
+    }
+    if !pending.is_empty() {
+        complete |= emit_pull_event(&app, &model_name, &pending)?;
+    }
+    if complete {
+        Ok(())
+    } else {
+        Err("unavailable".into())
+    }
+}
+
+#[tauri::command]
 async fn ollama_model_details(model_name: String) -> Result<serde_json::Value, String> {
     let url = "http://127.0.0.1:11434/api/show";
     let response = request_json(
@@ -423,6 +695,67 @@ mod tests {
             Duration::from_millis(300),
         ));
         assert_eq!(result.unwrap(), "0.1.0");
+    }
+
+    #[test]
+    fn parses_live_catalog_cards_and_rejects_invalid_library_paths() {
+        let html = r#"
+            <div id="searchresults">
+              <div data-result-count="20" data-has-more="true"></div>
+              <ul>
+                <li><a href="/library/qwen3.8">
+                  <h2 title="qwen3.8"><span>qwen3.8</span></h2>
+                  <div><span class="bg-indigo-50">vision</span><span class="bg-indigo-50">tools</span></div>
+                  <p> Qwen model <strong>for reasoning</strong>. </p>
+                  <div class="mt-3"><span title="6,522,021 downloads">6.5M</span>
+                    <span class="bg-[#ddf4ff]">27b</span>
+                  </div>
+                </a></li>
+                <li><a href="/library/../escape"><h2>Invalid path</h2></a></li>
+                <li><a href="https://example.com/library/other"><h2>External path</h2></a></li>
+              </ul>
+            </div>
+        "#;
+
+        let result = parse_catalog_page(html, 3).unwrap();
+        assert_eq!(result["page"], 3);
+        assert_eq!(result["hasMore"], true);
+        assert_eq!(result["models"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result["models"][0],
+            serde_json::json!({
+                "name": "qwen3.8",
+                "description": "Qwen model for reasoning.",
+                "capabilities": ["vision", "tools"],
+                "downloads": "6,522,021 downloads",
+                "sizes": ["27b"],
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_catalog_pages_without_expected_metadata() {
+        assert!(parse_catalog_page("<div id=\"searchresults\"></div>", 1).is_err());
+        assert!(parse_catalog_page("<main>unrelated content</main>", 1).is_err());
+    }
+
+    #[test]
+    fn validates_ollama_pull_model_names_without_accepting_whitespace_or_urls() {
+        for name in ["qwen3:8b", "org/model:latest", "model_name-2.1"] {
+            assert!(valid_model_name(name), "expected {name} to be accepted");
+        }
+        for name in [
+            "",
+            " qwen3",
+            "qwen3 ",
+            "https://example.com/model",
+            "/model",
+            "model/",
+            "bad name",
+        ] {
+            assert!(!valid_model_name(name), "expected {name:?} to be rejected");
+        }
+        assert!(!valid_model_name(&"a".repeat(513)));
     }
 
     #[test]
@@ -820,6 +1153,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ollama_connection,
             ollama_models,
+            ollama_catalog,
+            ollama_pull_model,
             ollama_model_details,
             ollama_running_models,
             ollama_load_model,
