@@ -37,32 +37,59 @@ fn element_text(element: scraper::ElementRef<'_>) -> String {
         .join(" ")
 }
 
+fn catalog_query_params(
+    query: &str,
+    page: u32,
+    sort: &str,
+    capability: &str,
+) -> Vec<(String, String)> {
+    let mut params = Vec::new();
+    if !query.is_empty() {
+        params.push(("q".into(), query.into()));
+    }
+    if sort != "popular" {
+        params.push(("o".into(), sort.into()));
+    }
+    if page > 1 {
+        params.push(("page".into(), page.to_string()));
+    }
+    if !capability.is_empty() {
+        params.push(("c".into(), capability.into()));
+    }
+    params
+}
+
 fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'static str> {
     let document = Html::parse_document(html);
     let results = selector("#searchresults")?;
-    let root = document.select(&results).next().ok_or("unavailable")?;
+    let root = document.select(&results).next();
     let count_selector = selector("[data-result-count]")?;
-    let result_count = root
-        .select(&count_selector)
-        .next()
+    let count = root
+        .and_then(|root| root.select(&count_selector).next())
         .and_then(|element| element.value().attr("data-result-count"))
-        .and_then(|value| value.parse::<u32>().ok())
-        .ok_or("unavailable")?;
-    if result_count > CATALOG_PAGE_SIZE {
+        .and_then(|value| value.parse::<u32>().ok());
+    if page == 1 && count.is_none() {
+        return Err("unavailable");
+    }
+    if count.is_some_and(|count| count > CATALOG_PAGE_SIZE) {
         return Err("unavailable");
     }
     let has_more = root
-        .select(&count_selector)
-        .next()
+        .and_then(|root| root.select(&count_selector).next())
         .and_then(|element| element.value().attr("data-has-more"))
-        == Some("true");
-    let card_selector = selector("ul > li > a[href^='/library/']")?;
+        .map(|value| value == "true")
+        .unwrap_or_else(|| {
+            selector("li[hx-get^='/search?page=']")
+                .ok()
+                .is_some_and(|selector| document.select(&selector).next().is_some())
+        });
+    let card_selector = selector("li > a[href^='/library/']")?;
     let title_selector = selector("h2")?;
     let description_selector = selector("p")?;
     let capability_selector = selector("span[class*='bg-indigo-50']")?;
     let size_selector = selector("span[class*='bg-[#ddf4ff]']")?;
     let downloads_selector = selector("div[class*='mt-3'] span[title*='downloads']")?;
-    let models = root
+    let models = document
         .select(&card_selector)
         .take(CATALOG_PAGE_SIZE as usize)
         .filter_map(|card| {
@@ -482,15 +509,16 @@ async fn ollama_catalog(
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| "unavailable")?;
-    let page = page.to_string();
-    let mut request = client.get("https://ollama.com/search").query(&[
-        ("q", query),
-        ("o", sort.as_str()),
-        ("page", page.as_str()),
-    ]);
-    if !capability.is_empty() {
-        request = request.query(&[("c", capability.as_str())]);
-    }
+    let request = client
+        .get("https://ollama.com/search")
+        .query(&catalog_query_params(query, page, &sort, &capability));
+    let request = if page > 1 {
+        request
+            .header("HX-Request", "true")
+            .header("HX-Target", "searchresults")
+    } else {
+        request
+    };
     let mut response = request.send().await.map_err(|_| "unavailable")?;
     if !response.status().is_success()
         || response
@@ -507,7 +535,7 @@ async fn ollama_catalog(
         html.extend_from_slice(&chunk);
     }
     let html = std::str::from_utf8(&html).map_err(|_| "unavailable")?;
-    parse_catalog_page(html, page.parse().map_err(|_| "unavailable")?).map_err(str::to_owned)
+    parse_catalog_page(html, page).map_err(str::to_owned)
 }
 
 fn emit_pull_event(app: &AppHandle, model_name: &str, line: &[u8]) -> Result<bool, String> {
@@ -737,6 +765,42 @@ mod tests {
     fn rejects_catalog_pages_without_expected_metadata() {
         assert!(parse_catalog_page("<div id=\"searchresults\"></div>", 1).is_err());
         assert!(parse_catalog_page("<main>unrelated content</main>", 1).is_err());
+    }
+
+    #[test]
+    fn parses_ollama_pagination_fragments_and_detects_the_next_page() {
+        let html = r#"
+            <li><a href="/library/qwen3.8">
+              <h2 title="qwen3.8"><span>qwen3.8</span></h2>
+              <div><span class="bg-indigo-50">vision</span></div>
+              <p>A model family.</p>
+              <div class="mt-3"><span class="bg-[#ddf4ff]">27b</span></div>
+            </a></li>
+            <li hx-get="/search?page=3" hx-trigger="revealed"></li>
+        "#;
+
+        let result = parse_catalog_page(html, 2).unwrap();
+        assert_eq!(result["page"], 2);
+        assert_eq!(result["hasMore"], true);
+        assert_eq!(result["models"].as_array().unwrap().len(), 1);
+        assert_eq!(result["models"][0]["name"], "qwen3.8");
+    }
+
+    #[test]
+    fn omits_default_catalog_query_parameters_that_ollama_redirects() {
+        assert_eq!(
+            catalog_query_params("", 1, "popular", ""),
+            Vec::<(String, String)>::new()
+        );
+        assert_eq!(
+            catalog_query_params("llama", 2, "newest", "vision"),
+            vec![
+                ("q".into(), "llama".into()),
+                ("o".into(), "newest".into()),
+                ("page".into(), "2".into()),
+                ("c".into(), "vision".into()),
+            ]
+        );
     }
 
     #[test]
