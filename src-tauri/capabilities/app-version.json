@@ -3,5 +3,9 @@
   "identifier": "app-version",
   "description": "Allow the local main window to read the application version.",
   "windows": ["main"],
-  "permissions": ["core:app:allow-version"]
+  "permissions": [
+    "core:app:allow-version",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
 }

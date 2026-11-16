@@ -8,8 +8,11 @@ import {
   Download,
   KeyRound,
   MessageSquare,
+  Pause,
+  Play,
   Search,
   Server,
+  X,
 } from "lucide-react";
 import { translate, type Locale } from "./i18n";
 import { Select, TextArea, TextInput } from "./FormControls";
@@ -27,6 +30,7 @@ export type CatalogModel = {
   name: string;
   description: string;
   capabilities: string[];
+  cloud?: boolean;
   downloads: string | null;
   sizes: string[];
 };
@@ -42,7 +46,7 @@ type Catalog = {
 
 type DownloadTask = {
   model: string;
-  state: "downloading" | "completed" | "error";
+  state: "queued" | "downloading" | "paused" | "completed" | "error";
   message: string;
   completed: number | null;
   total: number | null;
@@ -105,6 +109,8 @@ export default function WorkspaceViews({
   loadMoreCatalog,
   downloads,
   startDownload,
+  pauseDownload,
+  cancelDownload,
 }: {
   view: View;
   models: string[];
@@ -125,6 +131,8 @@ export default function WorkspaceViews({
   loadMoreCatalog: () => void;
   downloads: DownloadTask[];
   startDownload: (model: string) => void;
+  pauseDownload: (model: string) => void;
+  cancelDownload: (model: string) => void;
 }) {
   const t = (source: string) => translate(locale, source);
   const [apiModel, setApiModel] = useState("");
@@ -132,9 +140,6 @@ export default function WorkspaceViews({
   const selectedApi = models.includes(apiModel) ? apiModel : "";
 
   if (view === "Discover") {
-    const activeDownload = downloads.some(
-      (task) => task.state === "downloading",
-    );
     return (
       <section className="discover-view">
         <div className="directory-heading">
@@ -209,7 +214,7 @@ export default function WorkspaceViews({
                   (name) => name.split(":")[0] === model.name,
                 );
                 const task = downloads.find(
-                  (item) => item.model === model.name,
+                  (item) => !model.cloud && item.model === model.name,
                 );
                 return (
                   <tr key={model.name}>
@@ -223,11 +228,82 @@ export default function WorkspaceViews({
                               {model.sizes.join(" · ")}
                             </span>
                           )}
+                          {(task?.state === "queued" ||
+                            task?.state === "downloading" ||
+                            task?.state === "paused") && (
+                            <div
+                              className={`download-model-progress ${task.state}`}
+                            >
+                              <span
+                                className="download-model-state"
+                                role="status"
+                              >
+                                <CircleDashed
+                                  className={
+                                    task.state === "downloading"
+                                      ? "download-model-spinner"
+                                      : undefined
+                                  }
+                                  size={13}
+                                  aria-hidden="true"
+                                />
+                                {t(
+                                  task.state === "queued"
+                                    ? "Queued"
+                                    : task.state === "paused"
+                                      ? "Download paused"
+                                      : "Downloading",
+                                )}
+                              </span>
+                              {task.state === "downloading" && (
+                                <div
+                                  className="download-model-progress-track"
+                                  role="progressbar"
+                                  aria-label={`${t("Downloading")} ${model.name}`}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                  aria-valuenow={
+                                    task.total && task.completed !== null
+                                      ? Math.round(
+                                          (task.completed / task.total) * 100,
+                                        )
+                                      : undefined
+                                  }
+                                >
+                                  <span
+                                    className={
+                                      task.total ? "" : "indeterminate"
+                                    }
+                                    style={{
+                                      width:
+                                        task.total && task.completed !== null
+                                          ? `${Math.min(100, (task.completed / task.total) * 100)}%`
+                                          : undefined,
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {task?.state === "error" && (
+                            <span
+                              className="download-model-state failed"
+                              role="status"
+                              title={task.message}
+                            >
+                              {t("Download failed")}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </th>
                     <td className="directory-capability">
                       <div className="capability-list">
+                        {model.cloud && (
+                          <span className="capability capability-cloud">
+                            {t("cloud")}
+                          </span>
+                        )}
                         {model.capabilities.map((value) => (
                           <span className="capability" key={value}>
                             {t(value)}
@@ -239,24 +315,84 @@ export default function WorkspaceViews({
                       {model.downloads ?? "-"}
                     </td>
                     <td className="directory-action">
-                      {installed ? (
+                      {model.cloud ? (
+                        <span
+                          className="cloud-only-label"
+                          title={t(
+                            "Cloud-only models run remotely and cannot be downloaded locally.",
+                          )}
+                        >
+                          {t("Cloud only")}
+                        </span>
+                      ) : installed ? (
                         <span className="installed-label">
                           {t("Installed")}
                         </span>
+                      ) : task?.state === "downloading" ? (
+                        <div className="directory-download-actions">
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`${t("Pause")} ${model.name}`}
+                            title={t("Pause")}
+                            onClick={() => pauseDownload(model.name)}
+                          >
+                            <Pause size={15} aria-hidden="true" />
+                          </button>
+                          <button
+                            className="icon-button destructive"
+                            type="button"
+                            aria-label={`${t("Cancel download")} ${model.name}`}
+                            title={t("Cancel download")}
+                            onClick={() => cancelDownload(model.name)}
+                          >
+                            <X size={15} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : task?.state === "paused" ? (
+                        <div className="directory-download-actions">
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`${t("Resume")} ${model.name}`}
+                            title={t("Resume")}
+                            disabled={!connected}
+                            onClick={() => startDownload(model.name)}
+                          >
+                            <Play size={15} aria-hidden="true" />
+                          </button>
+                          <button
+                            className="icon-button destructive"
+                            type="button"
+                            aria-label={`${t("Cancel download")} ${model.name}`}
+                            title={t("Cancel download")}
+                            onClick={() => cancelDownload(model.name)}
+                          >
+                            <X size={15} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : task?.state === "queued" ? (
+                        <div className="directory-download-actions">
+                          <button
+                            className="icon-button destructive"
+                            type="button"
+                            aria-label={`${t("Cancel download")} ${model.name}`}
+                            title={t("Cancel download")}
+                            onClick={() => cancelDownload(model.name)}
+                          >
+                            <X size={15} aria-hidden="true" />
+                          </button>
+                        </div>
                       ) : (
                         <button
                           className="icon-button"
                           aria-label={`${t("Download")} ${model.name}`}
                           title={t(
-                            task?.state === "downloading"
-                              ? "Download in progress"
+                            task?.state === "error"
+                              ? "Retry download"
                               : "Download model",
                           )}
-                          disabled={
-                            !connected ||
-                            activeDownload ||
-                            task?.state === "downloading"
-                          }
+                          disabled={!connected}
                           onClick={() => startDownload(model.name)}
                         >
                           <ArrowDownToLine size={17} />
@@ -383,6 +519,47 @@ export default function WorkspaceViews({
                     <ArrowDownToLine size={15} />
                     {t("Retry download")}
                   </button>
+                )}
+                {(task.state === "downloading" || task.state === "queued") && (
+                  <div className="download-item-actions">
+                    <button
+                      type="button"
+                      aria-label={`${t("Pause")} ${task.model}`}
+                      onClick={() => pauseDownload(task.model)}
+                    >
+                      <Pause size={15} />
+                      {t("Pause")}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${t("Cancel download")} ${task.model}`}
+                      onClick={() => cancelDownload(task.model)}
+                    >
+                      <X size={15} />
+                      {t("Cancel download")}
+                    </button>
+                  </div>
+                )}
+                {task.state === "paused" && (
+                  <div className="download-item-actions">
+                    <button
+                      type="button"
+                      aria-label={`${t("Resume")} ${task.model}`}
+                      onClick={() => startDownload(task.model)}
+                      disabled={!connected}
+                    >
+                      <Play size={15} />
+                      {t("Resume")}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${t("Cancel download")} ${task.model}`}
+                      onClick={() => cancelDownload(task.model)}
+                    >
+                      <X size={15} />
+                      {t("Cancel download")}
+                    </button>
+                  </div>
                 )}
               </li>
             ))}

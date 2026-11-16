@@ -592,6 +592,45 @@ describe("desktop workspace", () => {
     expect(await screen.findByText("No matching models")).toBeTruthy();
   });
 
+  it("marks cloud catalog models as unavailable for local download", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "deepseek-v4.1-flash",
+                    description: "Cloud model.",
+                    capabilities: ["vision", "tools", "thinking"],
+                    downloads: null,
+                    sizes: [],
+                    cloud: true,
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(await screen.findByText("Cloud only")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Download deepseek-v4.1-flash" }),
+    ).toBeNull();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_pull_model"),
+    ).toBe(false);
+  });
+
   it("pulls a selected catalog model and shows its completed download", async () => {
     vi.mocked(invoke).mockImplementation((command) =>
       Promise.resolve(
@@ -637,6 +676,235 @@ describe("desktop workspace", () => {
     );
     expect(await screen.findByText("Download complete")).toBeTruthy();
     expect(screen.getByText("completed")).toBeTruthy();
+  });
+
+  it("shows download progress only on the model being pulled", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "qwen3",
+              description: "Reasoning model.",
+              capabilities: ["thinking"],
+              downloads: "25.8M",
+              sizes: ["8b"],
+            },
+            {
+              name: "llama3.2",
+              description: "Everyday chat model.",
+              capabilities: ["chat"],
+              downloads: "12M",
+              sizes: ["3b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model") return new Promise(() => {});
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+
+    const qwenPause = await screen.findByRole("button", {
+      name: "Pause qwen3",
+    });
+    const qwenCancel = screen.getByRole("button", {
+      name: "Cancel download qwen3",
+    });
+    const llamaDownload = screen.getByRole("button", {
+      name: "Download llama3.2",
+    });
+    expect(qwenPause.hasAttribute("disabled")).toBe(false);
+    expect(qwenCancel.hasAttribute("disabled")).toBe(false);
+    expect(llamaDownload.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Downloading")).toBeTruthy();
+    expect(
+      screen.getByRole("progressbar", { name: "Downloading qwen3" }),
+    ).toBeTruthy();
+
+    fireEvent.click(llamaDownload);
+
+    expect(
+      await screen.findByRole("button", { name: "Cancel download llama3.2" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pause llama3.2" })).toBeNull();
+    expect(screen.getByText("Queued")).toBeTruthy();
+  });
+
+  it("keeps a failed model download visible in the catalog row", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "qwen3",
+              description: "Reasoning model.",
+              capabilities: ["thinking"],
+              downloads: "25.8M",
+              sizes: ["8b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model") return Promise.reject("unavailable");
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+
+    expect(await screen.findByText("Download failed")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Download qwen3" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("shows the Ollama failure reason in the download queue", async () => {
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "qwen3",
+              description: "Reasoning model.",
+              capabilities: ["thinking"],
+              downloads: "25.8M",
+              sizes: ["8b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model")
+        return Promise.reject("model not found: qwen3");
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Downloads" }),
+    );
+    expect(await screen.findByText(/model not found: qwen3/)).toBeTruthy();
+  });
+
+  it("pauses and resumes a model download", async () => {
+    let pullCount = 0;
+    let rejectPull: ((reason?: string) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "qwen3",
+              description: "Reasoning model.",
+              capabilities: ["thinking"],
+              downloads: "25.8M",
+              sizes: ["8b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model") {
+        pullCount += 1;
+        return new Promise((_, reject) => {
+          rejectPull = reject;
+        });
+      }
+      if (command === "ollama_cancel_pull") {
+        rejectPull?.("Download cancelled");
+        return Promise.resolve();
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause qwen3" }));
+    expect(await screen.findByText("Download paused")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_cancel_pull"),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume qwen3" }));
+    await waitFor(() => expect(pullCount).toBe(2));
+    expect(screen.getByText("Downloading")).toBeTruthy();
+  });
+
+  it("cancels and removes a model download task", async () => {
+    let rejectPull: ((reason?: string) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "qwen3",
+              description: "Reasoning model.",
+              capabilities: ["thinking"],
+              downloads: "25.8M",
+              sizes: ["8b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model")
+        return new Promise((_, reject) => {
+          rejectPull = reject;
+        });
+      if (command === "ollama_cancel_pull") {
+        rejectPull?.("Download cancelled");
+        return Promise.resolve();
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel download qwen3" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Download qwen3" }),
+    ).toBeTruthy();
   });
 
   it("renders streamed Ollama pull progress in Downloads", async () => {
