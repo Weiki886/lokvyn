@@ -33,6 +33,7 @@ export type CatalogModel = {
   cloud?: boolean;
   downloads: string | null;
   sizes: string[];
+  downloadSize?: string | null;
 };
 
 type Catalog = {
@@ -265,6 +266,11 @@ export default function WorkspaceViews({
                         <div>
                           <strong>{model.name}</strong>
                           <p>{model.description}</p>
+                          {model.sizes.length > 0 && (
+                            <span className="model-size-hints">
+                              {model.sizes.join(" · ")}
+                            </span>
+                          )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
                             task?.state === "paused") && (
@@ -349,7 +355,7 @@ export default function WorkspaceViews({
                       </div>
                     </td>
                     <td className="directory-size">
-                      {model.sizes.length > 0 ? model.sizes.join(" · ") : "-"}
+                      {model.downloadSize ?? "-"}
                     </td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
@@ -474,7 +480,9 @@ export default function WorkspaceViews({
             data-testid="catalog-end"
           >
             {catalog.loadingMore && (
-              <span role="status">{t("Loading...")}</span>
+              <span className="catalog-loading" role="status">
+                {t("Loading...")}
+              </span>
             )}
             {catalog.loadMoreError && (
               <>

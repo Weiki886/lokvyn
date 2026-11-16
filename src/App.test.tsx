@@ -518,6 +518,7 @@ describe("desktop workspace", () => {
                         capabilities: ["thinking", "tools"],
                         downloads: "25.8M",
                         sizes: ["8b", "14b"],
+                        downloadSize: "5.2GB",
                       },
                       {
                         name: "gemma4",
@@ -525,6 +526,7 @@ describe("desktop workspace", () => {
                         capabilities: ["vision"],
                         downloads: "2.1M",
                         sizes: [],
+                        downloadSize: null,
                       },
                     ],
                     page: (args as { page?: number }).page ?? 1,
@@ -541,13 +543,23 @@ describe("desktop workspace", () => {
     expect(screen.getByText("gemma4")).toBeTruthy();
     expect(screen.getByText("Installed")).toBeTruthy();
     expect(screen.getByText("25.8M")).toBeTruthy();
+    expect(screen.getByText("5.2GB")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("5.2GB");
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".model-size-hints")?.textContent,
+    ).toBe("8b · 14b");
     expect(
       screen
         .getByRole("row", { name: /gemma4/ })
         .querySelector(".directory-size")?.textContent,
     ).toBe("-");
     expect(screen.getByRole("columnheader", { name: "Size" })).toBeTruthy();
-    expect(screen.getByText("8b · 14b")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Load more models" }),
     ).toBeNull();

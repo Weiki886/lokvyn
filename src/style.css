@@ -953,6 +953,13 @@ h1 {
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+.model-size-hints {
+  display: block;
+  margin-top: 4px;
+  color: var(--subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .model-directory .directory-size {
   width: 92px;
   color: var(--subtle);
@@ -1000,6 +1007,9 @@ h1 {
 }
 .catalog-pagination button {
   min-height: 32px;
+}
+.catalog-loading {
+  color: var(--ink);
 }
 .download-list {
   display: grid;
