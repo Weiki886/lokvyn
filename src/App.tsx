@@ -59,7 +59,7 @@ type Catalog = {
 };
 type DownloadTask = {
   model: string;
-  state: "downloading" | "completed" | "error";
+  state: "queued" | "downloading" | "paused" | "completed" | "error";
   message: string;
   completed: number | null;
   total: number | null;
@@ -151,6 +151,7 @@ export default function App() {
   });
   const [downloads, setDownloads] = useState<DownloadTask[]>([]);
   const catalogRequestId = useRef(0);
+  const downloadActions = useRef(new Map<string, "pause" | "cancel">());
 
   useEffect(() => {
     saveLocale(locale);
@@ -376,12 +377,22 @@ export default function App() {
   }
 
   async function downloadModel(model: string) {
-    if (downloads.some((task) => task.state === "downloading")) return;
+    if (
+      downloads.some(
+        (task) =>
+          task.model === model &&
+          (task.state === "queued" || task.state === "downloading"),
+      )
+    )
+      return;
+    const queued = downloads.some(
+      (task) => task.state === "queued" || task.state === "downloading",
+    );
     setDownloads((current) => [
       {
         model,
-        state: "downloading",
-        message: t("Starting download"),
+        state: queued ? "queued" : "downloading",
+        message: t(queued ? "Download queued" : "Starting download"),
         completed: null,
         total: null,
       },
@@ -397,14 +408,56 @@ export default function App() {
         ),
       );
       refreshModels();
-    } catch {
+    } catch (error) {
+      const action = downloadActions.current.get(model);
+      downloadActions.current.delete(model);
+      if (action === "cancel") {
+        setDownloads((current) =>
+          current.filter((task) => task.model !== model),
+        );
+        return;
+      }
+      const detail =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "";
       setDownloads((current) =>
         current.map((task) =>
           task.model === model
-            ? { ...task, state: "error", message: t("Download failed") }
+            ? {
+                ...task,
+                state: action === "pause" ? "paused" : "error",
+                message:
+                  action === "pause"
+                    ? t("Download paused")
+                    : detail
+                      ? `${t("Download failed")}: ${detail.slice(0, 512)}`
+                      : t("Download failed"),
+              }
             : task,
         ),
       );
+    }
+  }
+
+  async function pauseDownload(model: string) {
+    downloadActions.current.set(model, "pause");
+    try {
+      await invoke("ollama_cancel_pull", { modelName: model });
+    } catch {
+      downloadActions.current.delete(model);
+    }
+  }
+
+  async function cancelDownload(model: string) {
+    downloadActions.current.set(model, "cancel");
+    try {
+      await invoke("ollama_cancel_pull", { modelName: model });
+      setDownloads((current) => current.filter((task) => task.model !== model));
+    } catch {
+      downloadActions.current.delete(model);
     }
   }
 
@@ -882,6 +935,8 @@ export default function App() {
                 loadMoreCatalog={loadMoreCatalog}
                 downloads={downloads}
                 startDownload={downloadModel}
+                pauseDownload={pauseDownload}
+                cancelDownload={cancelDownload}
               />
             )}
           </section>

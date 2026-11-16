@@ -928,7 +928,7 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 .model-directory .directory-action {
-  width: 76px;
+  width: 92px;
   text-align: right;
 }
 .directory-model {
@@ -978,6 +978,16 @@ h1 {
   font-size: 11px;
   font-weight: 600;
 }
+.cloud-only-label {
+  color: #087e9b;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.capability-cloud {
+  color: #087e9b;
+  background: #e5f7fb;
+}
 .catalog-pagination {
   display: flex;
   flex-direction: column;
@@ -1026,6 +1036,9 @@ h1 {
 .download-state.downloading {
   color: var(--brand);
 }
+.download-state.paused {
+  color: var(--muted);
+}
 .download-state.completed {
   color: var(--success);
 }
@@ -1059,12 +1072,67 @@ h1 {
 .download-item > button {
   justify-self: start;
 }
+.download-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.download-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .directory-model p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+.download-model-progress {
+  display: grid;
+  gap: 5px;
+  width: min(100%, 240px);
+  margin-top: 6px;
+}
+.download-model-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 600;
+}
+.download-model-progress.queued .download-model-state {
+  color: var(--muted);
+}
+.download-model-state.failed {
+  color: #c43b35;
+}
+.download-model-progress-track {
+  height: 4px;
+  overflow: hidden;
+  background: #e7edf6;
+  border-radius: 3px;
+}
+.download-model-progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  transition: width 180ms ease;
+}
+.download-model-progress-track > span.indeterminate {
+  width: 30%;
+  animation: download-progress 1.2s ease-in-out infinite alternate;
+}
+.download-model-spinner {
+  flex: 0 0 auto;
+  animation: download-spin 1.2s linear infinite;
+}
+@keyframes download-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .model-symbol {
   display: grid;
@@ -1102,6 +1170,14 @@ h1 {
   color: var(--brand);
   border-color: var(--line);
   background: var(--surface);
+}
+.directory-download-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.directory-action .destructive {
+  color: #c43b35;
 }
 .empty-state {
   display: grid;

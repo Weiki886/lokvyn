@@ -2,15 +2,69 @@
 
 use scraper::{Html, Selector};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     ffi::OsString,
     process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
 
 static OLLAMA_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static OLLAMA_PULL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static OLLAMA_PULL_CONTROLS: LazyLock<Mutex<HashMap<String, Arc<PullControl>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct PullControl {
+    cancelled: AtomicBool,
+    finished: AtomicBool,
+    cancel_notify: tokio::sync::Notify,
+    finish_notify: tokio::sync::Notify,
+}
+
+impl PullControl {
+    fn new() -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            cancel_notify: tokio::sync::Notify::new(),
+            finish_notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.cancel_notify.notify_one();
+    }
+
+    fn finish(&self) {
+        self.finished.store(true, Ordering::Release);
+        self.finish_notify.notify_one();
+    }
+
+    async fn cancelled(&self) {
+        loop {
+            let notified = self.cancel_notify.notified();
+            if self.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_finished(&self) {
+        loop {
+            let notified = self.finish_notify.notified();
+            if self.finished.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
 
 const CATALOG_RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const CATALOG_PAGE_SIZE: u32 = 20;
@@ -20,6 +74,7 @@ struct CatalogModel {
     name: String,
     description: String,
     capabilities: Vec<String>,
+    cloud: bool,
     downloads: Option<String>,
     sizes: Vec<String>,
 }
@@ -87,6 +142,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
     let title_selector = selector("h2")?;
     let description_selector = selector("p")?;
     let capability_selector = selector("span[class*='bg-indigo-50']")?;
+    let cloud_selector = selector("span[class*='bg-cyan-50']")?;
     let size_selector = selector("span[class*='bg-[#ddf4ff]']")?;
     let downloads_selector = selector("div[class*='mt-3'] span[title*='downloads']")?;
     let models = document
@@ -118,6 +174,9 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 .filter(|value| !value.is_empty() && value.len() <= 32)
                 .take(16)
                 .collect::<Vec<_>>();
+            let cloud = card
+                .select(&cloud_selector)
+                .any(|badge| element_text(badge).eq_ignore_ascii_case("cloud"));
             let sizes = card
                 .select(&size_selector)
                 .map(element_text)
@@ -134,6 +193,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 name: name.to_owned(),
                 description,
                 capabilities,
+                cloud,
                 downloads,
                 sizes,
             })
@@ -143,6 +203,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 "name": model.name,
                 "description": model.description,
                 "capabilities": model.capabilities,
+                "cloud": model.cloud,
                 "downloads": model.downloads,
                 "sizes": model.sizes,
             })
@@ -538,26 +599,33 @@ async fn ollama_catalog(
     parse_catalog_page(html, page).map_err(str::to_owned)
 }
 
+fn safe_pull_error(message: &str) -> String {
+    let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bounded = normalized.chars().take(256).collect::<String>();
+    if bounded.is_empty() {
+        "Ollama pull failed".into()
+    } else {
+        bounded
+    }
+}
+
 fn emit_pull_event(app: &AppHandle, model_name: &str, line: &[u8]) -> Result<bool, String> {
     if line.is_empty() {
         return Ok(false);
     }
     if line.len() > 16 * 1024 {
-        return Err("unavailable".into());
+        return Err("Ollama returned an oversized pull event".into());
     }
-    let value: serde_json::Value = serde_json::from_slice(line).map_err(|_| "unavailable")?;
-    if value
-        .get("error")
-        .and_then(serde_json::Value::as_str)
-        .is_some()
-    {
-        return Err("unavailable".into());
+    let value: serde_json::Value =
+        serde_json::from_slice(line).map_err(|_| "Ollama returned invalid pull data".to_owned())?;
+    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+        return Err(safe_pull_error(error));
     }
     let status = value
         .get("status")
         .and_then(serde_json::Value::as_str)
         .filter(|status| !status.is_empty() && status.len() <= 256)
-        .ok_or("unavailable")?;
+        .ok_or_else(|| "Ollama pull event did not include a status".to_owned())?;
     let complete = status == "success";
     let _ = app.emit(
         "ollama-pull-progress",
@@ -575,45 +643,128 @@ fn emit_pull_event(app: &AppHandle, model_name: &str, line: &[u8]) -> Result<boo
 #[tauri::command]
 async fn ollama_pull_model(app: AppHandle, model_name: String) -> Result<(), String> {
     if !valid_model_name(&model_name) {
-        return Err("unavailable".into());
+        return Err("Invalid Ollama model name".into());
     }
-    let _guard = OLLAMA_PULL_LOCK.lock().await;
+    let control = Arc::new(PullControl::new());
+    {
+        let mut controls = OLLAMA_PULL_CONTROLS
+            .lock()
+            .map_err(|_| "Download controls are unavailable".to_owned())?;
+        if controls.contains_key(&model_name) {
+            return Err("This model is already queued or downloading".into());
+        }
+        controls.insert(model_name.clone(), control.clone());
+    }
+
+    let result = ollama_pull_model_inner(&app, &model_name, &control).await;
+    if let Ok(mut controls) = OLLAMA_PULL_CONTROLS.lock() {
+        if controls
+            .get(&model_name)
+            .is_some_and(|registered| Arc::ptr_eq(registered, &control))
+        {
+            controls.remove(&model_name);
+        }
+    }
+    control.finish();
+    result
+}
+
+async fn ollama_pull_model_inner(
+    app: &AppHandle,
+    model_name: &str,
+    control: &PullControl,
+) -> Result<(), String> {
+    let _guard = tokio::select! {
+        _ = control.cancelled() => return Err("Download cancelled".into()),
+        guard = OLLAMA_PULL_LOCK.lock() => guard,
+    };
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(7 * 24 * 60 * 60))
         .build()
-        .map_err(|_| "unavailable")?;
-    let mut response = client
+        .map_err(|error| {
+            format!(
+                "Could not prepare Ollama request: {}",
+                safe_pull_error(&error.to_string())
+            )
+        })?;
+    let request = client
         .post("http://127.0.0.1:11434/api/pull")
         .json(&serde_json::json!({ "model": model_name, "stream": true }))
-        .send()
-        .await
-        .map_err(|_| "unavailable")?;
+        .send();
+    let mut response = tokio::select! {
+        _ = control.cancelled() => return Err("Download cancelled".into()),
+        response = request => response.map_err(|error| {
+            format!(
+                "Could not connect to Ollama: {}",
+                safe_pull_error(&error.to_string())
+            )
+        })?,
+    };
     if !response.status().is_success() {
-        return Err("unavailable".into());
+        let status = response.status();
+        let detail = match response.chunk().await {
+            Ok(Some(chunk)) if chunk.len() <= 16 * 1024 => {
+                serde_json::from_slice::<serde_json::Value>(&chunk)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("error")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .map(|message| format!(": {}", safe_pull_error(&message)))
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        };
+        return Err(format!("Ollama returned HTTP {status}{detail}"));
     }
     let mut pending = Vec::new();
     let mut complete = false;
-    while let Some(chunk) = response.chunk().await.map_err(|_| "unavailable")? {
+    loop {
+        let chunk = tokio::select! {
+            _ = control.cancelled() => return Err("Download cancelled".into()),
+            chunk = response.chunk() => chunk.map_err(|error| {
+                format!(
+                    "Failed reading Ollama pull response: {}",
+                    safe_pull_error(&error.to_string())
+                )
+            })?,
+        };
+        let Some(chunk) = chunk else { break };
         pending.extend_from_slice(&chunk);
         if pending.len() > 16 * 1024 && !pending.contains(&b'\n') {
-            return Err("unavailable".into());
+            return Err("Ollama returned an oversized pull event".into());
         }
         while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
             let line = pending.drain(..=newline).collect::<Vec<_>>();
-            complete |= emit_pull_event(&app, &model_name, &line[..line.len() - 1])?;
+            complete |= emit_pull_event(app, model_name, &line[..line.len() - 1])?;
         }
     }
     if !pending.is_empty() {
-        complete |= emit_pull_event(&app, &model_name, &pending)?;
+        complete |= emit_pull_event(app, model_name, &pending)?;
     }
     if complete {
         Ok(())
     } else {
-        Err("unavailable".into())
+        Err("Ollama pull ended before completion".into())
     }
+}
+
+#[tauri::command]
+async fn ollama_cancel_pull(model_name: String) -> Result<(), String> {
+    let control = OLLAMA_PULL_CONTROLS
+        .lock()
+        .map_err(|_| "Download controls are unavailable".to_owned())?
+        .get(&model_name)
+        .cloned()
+        .ok_or_else(|| "No active download for this model".to_owned())?;
+    control.cancel();
+    control.wait_finished().await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -755,9 +906,36 @@ mod tests {
                 "name": "qwen3.8",
                 "description": "Qwen model for reasoning.",
                 "capabilities": ["vision", "tools"],
+                "cloud": false,
                 "downloads": "6,522,021 downloads",
                 "sizes": ["27b"],
             })
+        );
+    }
+
+    #[test]
+    fn identifies_cloud_models_in_catalog_cards() {
+        let html = r#"
+            <div id="searchresults">
+              <div data-result-count="1" data-has-more="false"></div>
+              <ul>
+                <li><a href="/library/deepseek-v4.1-flash">
+                  <h2 title="deepseek-v4.1-flash"><span>deepseek-v4.1-flash</span></h2>
+                  <div>
+                    <span class="bg-indigo-50">vision</span>
+                    <span class="bg-cyan-50">cloud</span>
+                  </div>
+                  <p>A cloud model.</p>
+                </a></li>
+              </ul>
+            </div>
+        "#;
+
+        let result = parse_catalog_page(html, 1).unwrap();
+        assert_eq!(result["models"][0]["cloud"], true);
+        assert_eq!(
+            result["models"][0]["capabilities"],
+            serde_json::json!(["vision"])
         );
     }
 
@@ -820,6 +998,32 @@ mod tests {
             assert!(!valid_model_name(name), "expected {name:?} to be rejected");
         }
         assert!(!valid_model_name(&"a".repeat(513)));
+    }
+
+    #[test]
+    fn bounds_and_sanitizes_ollama_pull_errors_for_display() {
+        assert_eq!(
+            safe_pull_error("  model not found\ntry another tag  "),
+            "model not found try another tag"
+        );
+        assert_eq!(safe_pull_error("\n\t"), "Ollama pull failed");
+        assert_eq!(safe_pull_error(&"x".repeat(300)).len(), 256);
+    }
+
+    #[test]
+    fn pull_control_cancellation_and_completion_are_observable() {
+        let control = PullControl::new();
+        let waiter_control = Arc::new(control);
+        let cancel_control = waiter_control.clone();
+        tauri::async_runtime::block_on(async move {
+            let cancelled = waiter_control.clone();
+            let waiter = tokio::spawn(async move { cancelled.cancelled().await });
+            tokio::task::yield_now().await;
+            cancel_control.cancel();
+            waiter.await.unwrap();
+            cancel_control.finish();
+            cancel_control.wait_finished().await;
+        });
     }
 
     #[test]
@@ -1219,6 +1423,7 @@ fn main() {
             ollama_models,
             ollama_catalog,
             ollama_pull_model,
+            ollama_cancel_pull,
             ollama_model_details,
             ollama_running_models,
             ollama_load_model,
