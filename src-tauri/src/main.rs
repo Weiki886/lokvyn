@@ -68,6 +68,7 @@ impl PullControl {
 
 const CATALOG_RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const CATALOG_PAGE_SIZE: u32 = 20;
+const CATALOG_DETAIL_CONCURRENCY: usize = 4;
 
 #[derive(Debug, PartialEq)]
 struct CatalogModel {
@@ -77,6 +78,7 @@ struct CatalogModel {
     cloud: bool,
     downloads: Option<String>,
     sizes: Vec<String>,
+    download_size: Option<String>,
 }
 
 fn selector(value: &str) -> Result<Selector, &'static str> {
@@ -90,6 +92,53 @@ fn element_text(element: scraper::ElementRef<'_>) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn valid_download_size(value: &str) -> bool {
+    let Some(number) = ["TB", "GB", "MB", "KB", "B"]
+        .iter()
+        .find_map(|unit| value.strip_suffix(unit))
+    else {
+        return false;
+    };
+    !number.is_empty()
+        && number.chars().filter(|character| *character == '.').count() <= 1
+        && number
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.')
+        && number.chars().any(|character| character.is_ascii_digit())
+}
+
+fn parse_default_download_size(html: &str, model_name: &str) -> Option<String> {
+    if model_name.is_empty()
+        || !model_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return None;
+    }
+    let document = Html::parse_document(html);
+    let tag_selector =
+        Selector::parse(&format!("a[href=\"/library/{model_name}:latest\"]")).ok()?;
+    let size_selector = Selector::parse("p.col-span-2").ok()?;
+    for tag_link in document.select(&tag_selector) {
+        let mut parent = tag_link.parent();
+        while let Some(node) = parent {
+            parent = node.parent();
+            let Some(element) = scraper::ElementRef::wrap(node) else {
+                continue;
+            };
+            if let Some(size) = element
+                .select(&size_selector)
+                .next()
+                .map(element_text)
+                .filter(|value| valid_download_size(value))
+            {
+                return Some(size);
+            }
+        }
+    }
+    None
 }
 
 fn catalog_query_params(
@@ -196,6 +245,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 cloud,
                 downloads,
                 sizes,
+                download_size: None,
             })
         })
         .map(|model| {
@@ -206,6 +256,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 "cloud": model.cloud,
                 "downloads": model.downloads,
                 "sizes": model.sizes,
+                "downloadSize": model.download_size,
             })
         })
         .collect::<Vec<_>>();
@@ -596,7 +647,86 @@ async fn ollama_catalog(
         html.extend_from_slice(&chunk);
     }
     let html = std::str::from_utf8(&html).map_err(|_| "unavailable")?;
-    parse_catalog_page(html, page).map_err(str::to_owned)
+    let mut catalog = parse_catalog_page(html, page).map_err(str::to_owned)?;
+    enrich_catalog_download_sizes(&client, &mut catalog).await;
+    Ok(catalog)
+}
+
+async fn fetch_default_download_size(client: &reqwest::Client, model_name: &str) -> Option<String> {
+    let url = format!("https://ollama.com/library/{model_name}/tags");
+    let mut response = client
+        .get(url)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > CATALOG_RESPONSE_LIMIT as u64)
+    {
+        return None;
+    }
+    let mut html = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > CATALOG_RESPONSE_LIMIT.saturating_sub(html.len()) {
+            return None;
+        }
+        html.extend_from_slice(&chunk);
+    }
+    let html = std::str::from_utf8(&html).ok()?;
+    parse_default_download_size(html, model_name)
+}
+
+async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut serde_json::Value) {
+    let Some(models) = catalog.get("models").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let model_names = models
+        .iter()
+        .filter(|model| {
+            !model
+                .get("cloud")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|model| {
+            model
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(CATALOG_DETAIL_CONCURRENCY));
+    let mut tasks = tokio::task::JoinSet::new();
+    for model_name in model_names {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        tasks.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.ok()?;
+            let size = fetch_default_download_size(&client, &model_name).await;
+            Some((model_name, size))
+        });
+    }
+    let mut download_sizes = HashMap::new();
+    while let Some(result) = tasks.join_next().await {
+        if let Ok(Some((name, size))) = result {
+            download_sizes.insert(name, size);
+        }
+    }
+    if let Some(models) = catalog
+        .get_mut("models")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for model in models {
+            let Some(name) = model.get("name").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if let Some(size) = download_sizes.get(name).and_then(Option::as_ref) {
+                model["downloadSize"] = serde_json::Value::String(size.clone());
+            }
+        }
+    }
 }
 
 fn safe_pull_error(message: &str) -> String {
@@ -909,8 +1039,48 @@ mod tests {
                 "cloud": false,
                 "downloads": "6,522,021 downloads",
                 "sizes": ["27b"],
+                "downloadSize": null,
             })
         );
+    }
+
+    #[test]
+    fn parses_default_model_download_size_from_ollama_tags_page() {
+        let html = r#"
+            <div class="group px-4 py-3">
+              <div class="hidden md:flex flex-col">
+                <div class="grid grid-cols-12 items-center">
+                  <span class="col-span-6"><a href="/library/qwen3:latest">qwen3:latest</a></span>
+                  <p class="col-span-2 text-neutral-500">5.2GB</p>
+                  <p class="col-span-2">40K</p>
+                </div>
+              </div>
+            </div>
+        "#;
+
+        assert_eq!(
+            parse_default_download_size(html, "qwen3"),
+            Some("5.2GB".into())
+        );
+    }
+
+    #[test]
+    fn omits_download_size_when_default_tag_or_valid_size_is_missing() {
+        let missing_latest = r#"
+            <div class="grid grid-cols-12 items-center">
+              <a href="/library/qwen3:8b">qwen3:8b</a>
+              <p class="col-span-2">5.2GB</p>
+            </div>
+        "#;
+        let invalid_size = r#"
+            <div class="grid grid-cols-12 items-center">
+              <a href="/library/qwen3:latest">qwen3:latest</a>
+              <p class="col-span-2">unknown</p>
+            </div>
+        "#;
+
+        assert_eq!(parse_default_download_size(missing_latest, "qwen3"), None);
+        assert_eq!(parse_default_download_size(invalid_size, "qwen3"), None);
     }
 
     #[test]
