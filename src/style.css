@@ -953,12 +953,12 @@ h1 {
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
-.model-size-hints {
-  display: block;
-  margin-top: 4px;
+.model-directory .directory-size {
+  width: 92px;
   color: var(--subtle);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .capability-list {
   display: flex;
@@ -990,10 +990,11 @@ h1 {
 }
 .catalog-pagination {
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 14px 0;
+  min-height: 34px;
+  padding: 8px 0;
   color: var(--danger);
   font-size: 12px;
 }
@@ -1548,6 +1549,9 @@ h1 {
   }
   .model-directory .directory-capability {
     display: none;
+  }
+  .model-directory .directory-size {
+    width: 76px;
   }
   .model-directory th,
   .model-directory td {

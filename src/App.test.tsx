@@ -37,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -483,33 +484,52 @@ describe("desktop workspace", () => {
   });
 
   it("loads live catalog results, searches remotely, and shows installed state", async () => {
-    vi.mocked(invoke).mockImplementation((command) =>
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    let failNextPage = true;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionCallback = callback;
+        }
+
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    vi.mocked(invoke).mockImplementation((command, args) =>
       Promise.resolve(
         command === "ollama_connection"
           ? "0.1.0"
           : command === "ollama_models"
             ? [ollamaModel("qwen3:8b")]
             : command === "ollama_catalog"
-              ? {
-                  models: [
-                    {
-                      name: "qwen3",
-                      description: "A reasoning model family.",
-                      capabilities: ["thinking", "tools"],
-                      downloads: "25.8M",
-                      sizes: ["8b", "14b"],
-                    },
-                    {
-                      name: "gemma4",
-                      description: "An open model family.",
-                      capabilities: ["vision"],
-                      downloads: "2.1M",
-                      sizes: ["4b"],
-                    },
-                  ],
-                  page: 1,
-                  hasMore: true,
-                }
+              ? (args as { page?: number }).page === 2 && failNextPage
+                ? ((failNextPage = false), Promise.reject(new Error("network")))
+                : {
+                    models: [
+                      {
+                        name: "qwen3",
+                        description: "A reasoning model family.",
+                        capabilities: ["thinking", "tools"],
+                        downloads: "25.8M",
+                        sizes: ["8b", "14b"],
+                      },
+                      {
+                        name: "gemma4",
+                        description: "An open model family.",
+                        capabilities: ["vision"],
+                        downloads: "2.1M",
+                        sizes: [],
+                      },
+                    ],
+                    page: (args as { page?: number }).page ?? 1,
+                    hasMore: true,
+                  }
               : [],
       ),
     );
@@ -521,6 +541,16 @@ describe("desktop workspace", () => {
     expect(screen.getByText("gemma4")).toBeTruthy();
     expect(screen.getByText("Installed")).toBeTruthy();
     expect(screen.getByText("25.8M")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /gemma4/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("-");
+    expect(screen.getByRole("columnheader", { name: "Size" })).toBeTruthy();
+    expect(screen.getByText("8b · 14b")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Load more models" }),
+    ).toBeNull();
     const search = screen.getByRole("searchbox", { name: "Search models" });
     fireEvent.change(search, { target: { value: "qwen" } });
     await waitFor(() => {
@@ -534,9 +564,21 @@ describe("desktop workspace", () => {
           ),
       ).toBe(true);
     });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Load more models" }),
-    );
+    const catalogEnd = await screen.findByTestId("catalog-end");
+    act(() => {
+      intersectionCallback?.(
+        [
+          {
+            isIntersecting: true,
+            target: catalogEnd,
+          } as unknown as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      );
+    });
+    const retryLoad = await screen.findByRole("button", {
+      name: "Retry loading more",
+    });
     await waitFor(() =>
       expect(
         vi
@@ -547,6 +589,18 @@ describe("desktop workspace", () => {
               (args as { page?: number }).page === 2,
           ),
       ).toBe(true),
+    );
+    fireEvent.click(retryLoad);
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([name, args]) =>
+              name === "ollama_catalog" &&
+              (args as { page?: number }).page === 2,
+          ),
+      ).toHaveLength(2),
     );
     fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
     expect(

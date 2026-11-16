@@ -95,6 +95,7 @@ const chinese: Record<string, string> = {
   "Live catalog": "实时模型目录",
   "Model directory": "模型目录",
   "Model family": "模型系列",
+  Size: "大小",
   Focus: "适用方向",
   "models shown": "个模型",
   "Development build": "开发版本",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUp,
@@ -136,8 +136,47 @@ export default function WorkspaceViews({
 }) {
   const t = (source: string) => translate(locale, source);
   const [apiModel, setApiModel] = useState("");
+  const catalogEndRef = useRef<HTMLDivElement>(null);
+  const loadMoreCatalogRef = useRef(loadMoreCatalog);
+  const autoLoadPending = useRef(false);
   const selectedChat = models.includes(chatModel) ? chatModel : "";
   const selectedApi = models.includes(apiModel) ? apiModel : "";
+
+  useEffect(() => {
+    loadMoreCatalogRef.current = loadMoreCatalog;
+  }, [loadMoreCatalog]);
+
+  useEffect(() => {
+    if (!catalog.loadingMore) autoLoadPending.current = false;
+    if (
+      view !== "Discover" ||
+      catalog.state !== "loaded" ||
+      !catalog.hasMore ||
+      catalog.loadMoreError ||
+      catalog.loadingMore ||
+      !catalogEndRef.current ||
+      typeof IntersectionObserver === "undefined"
+    )
+      return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        !autoLoadPending.current
+      ) {
+        autoLoadPending.current = true;
+        loadMoreCatalogRef.current();
+      }
+    });
+    observer.observe(catalogEndRef.current);
+    return () => observer.disconnect();
+  }, [
+    catalog.hasMore,
+    catalog.loadMoreError,
+    catalog.loadingMore,
+    catalog.state,
+    view,
+  ]);
 
   if (view === "Discover") {
     return (
@@ -199,6 +238,9 @@ export default function WorkspaceViews({
               <th scope="col" className="directory-capability">
                 {t("Capability")}
               </th>
+              <th scope="col" className="directory-size">
+                {t("Size")}
+              </th>
               <th scope="col" className="directory-downloads">
                 {t("Downloads")}
               </th>
@@ -223,11 +265,6 @@ export default function WorkspaceViews({
                         <div>
                           <strong>{model.name}</strong>
                           <p>{model.description}</p>
-                          {model.sizes.length > 0 && (
-                            <span className="model-size-hints">
-                              {model.sizes.join(" · ")}
-                            </span>
-                          )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
                             task?.state === "paused") && (
@@ -310,6 +347,9 @@ export default function WorkspaceViews({
                           </span>
                         ))}
                       </div>
+                    </td>
+                    <td className="directory-size">
+                      {model.sizes.length > 0 ? model.sizes.join(" · ") : "-"}
                     </td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
@@ -428,21 +468,22 @@ export default function WorkspaceViews({
           </div>
         )}
         {catalog.state === "loaded" && catalog.hasMore && (
-          <div className="catalog-pagination">
-            {catalog.loadMoreError && (
-              <span role="status">{t("Could not load more models")}</span>
+          <div
+            className="catalog-pagination"
+            ref={catalogEndRef}
+            data-testid="catalog-end"
+          >
+            {catalog.loadingMore && (
+              <span role="status">{t("Loading...")}</span>
             )}
-            <button
-              type="button"
-              onClick={loadMoreCatalog}
-              disabled={catalog.loadingMore}
-            >
-              {catalog.loadingMore
-                ? t("Loading...")
-                : catalog.loadMoreError
-                  ? t("Retry loading more")
-                  : t("Load more models")}
-            </button>
+            {catalog.loadMoreError && (
+              <>
+                <span role="status">{t("Could not load more models")}</span>
+                <button type="button" onClick={loadMoreCatalog}>
+                  {t("Retry loading more")}
+                </button>
+              </>
+            )}
           </div>
         )}
       </section>
