@@ -813,6 +813,132 @@ describe("desktop workspace", () => {
     );
   });
 
+  it("offers exact quantization tags and sizes after choosing a parameter size", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "tev1",
+                    description: "Decision model.",
+                    capabilities: ["reasoning"],
+                    downloads: "170K",
+                    sizes: ["0.8b", "4b"],
+                    downloadSize: "4.4GB - 4.6GB",
+                    variants: [
+                      { tag: "0.8b", downloadSize: "834MB - 1.5GB" },
+                      { tag: "0.8b-q8_0", downloadSize: "834MB" },
+                      { tag: "4b", downloadSize: "4.4GB - 4.6GB" },
+                      { tag: "4b-q4_K_M", downloadSize: "2.8GB" },
+                      { tag: "4b-q8_0", downloadSize: "4.6GB" },
+                      { tag: "4b-bf16", downloadSize: "8.7GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download tev1" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "4b · 4.4GB - 4.6GB" }),
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: /tev1:4b-q4_K_M.*2.8GB.*Recommended/,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /tev1:4b-q8_0.*4.6GB/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /tev1:4b-bf16.*8.7GB/ }),
+    ).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_pull_model"),
+    ).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /tev1:4b-q4_K_M.*2.8GB.*Recommended/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command, args]) =>
+              command === "ollama_pull_model" &&
+              (args as { modelName?: string }).modelName === "tev1:4b-q4_K_M",
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("recommends the default available quantization when Q4_K_M is unavailable", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "sample-model",
+                    description: "A test model.",
+                    capabilities: ["chat"],
+                    downloads: "10K",
+                    sizes: ["4b"],
+                    variants: [
+                      { tag: "4b-q5_K_M", downloadSize: "3.1GB" },
+                      { tag: "4b-q8_0", downloadSize: "4.6GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download sample-model" }),
+    );
+
+    const recommended = await screen.findByRole("button", {
+      name: /sample-model:4b-q5_K_M.*3.1GB.*Recommended/,
+    });
+    expect(recommended.classList.contains("recommended")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /sample-model:4b-q8_0.*4.6GB/ }),
+    ).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_pull_model"),
+    ).toBe(false);
+  });
+
   it("shows download progress only on the model being pulled", async () => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "ollama_connection") return Promise.resolve("0.1.0");

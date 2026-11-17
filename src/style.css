@@ -304,7 +304,9 @@ h1 {
 }
 .primary,
 .workspace-content
-  button:not(.model-select):not(.icon-button):not(.form-select),
+  button:not(.model-select):not(.icon-button):not(.form-select):not(
+    .model-variant-option
+  ):not(.variant-back-button),
 .empty-state button,
 .section-heading button,
 .composer button {
@@ -324,9 +326,9 @@ h1 {
 }
 .primary:hover:not(:disabled),
 .workspace-content
-  button:not(.model-select):not(.icon-button):not(.form-select):hover:not(
-    :disabled
-  ) {
+  button:not(.model-select):not(.icon-button):not(.form-select):not(
+    .model-variant-option
+  ):not(.variant-back-button):hover:not(:disabled) {
   background: var(--brand-dark);
 }
 .workspace-body {
@@ -961,43 +963,91 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 .model-variant-picker {
+  width: fit-content;
+  max-width: 100%;
   margin-top: 8px;
-  padding: 9px;
+  padding: 7px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--surface-muted);
 }
 .variant-choice-label {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
   color: var(--subtle);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
 }
 .model-variant-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
 }
 .model-variant-option {
-  min-height: 28px;
-  padding: 4px 8px;
-  color: var(--brand-dark);
-  border: 1px solid var(--line-strong);
+  min-height: 25px;
+  padding: 3px 7px;
+  color: var(--brand);
+  border: 1px solid #d5e3f7;
   border-radius: 4px;
-  background: var(--surface);
+  background: #edf4ff;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.35;
   text-align: left;
 }
 .model-variant-option:hover:not(:disabled) {
-  border-color: var(--brand);
-  background: var(--brand-soft);
+  border-color: #b9d1f5;
+  background: #e2edff;
 }
 .model-variant-option:disabled {
   cursor: not-allowed;
   opacity: 0.52;
+}
+.quantization-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+}
+.quantization-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 8px;
+  min-width: 0;
+  text-align: left;
+}
+.quantization-option.recommended {
+  border-color: #c9dfd4;
+  background: #f4faf6;
+}
+.quantization-tag {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.quantization-size {
+  color: var(--subtle);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.quantization-recommended {
+  grid-column: 1 / -1;
+  color: var(--success);
+  font-size: 9px;
+  font-weight: 600;
+}
+.variant-back-button {
+  min-height: 22px;
+  margin-top: 5px;
+  padding: 2px 4px;
+  color: var(--subtle);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+.variant-back-button:hover {
+  color: var(--brand);
 }
 .model-directory .directory-size {
   width: 160px;

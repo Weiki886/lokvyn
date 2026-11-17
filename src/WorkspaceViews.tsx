@@ -66,6 +66,17 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
+function variantsForParameter(
+  variants: CatalogModel["variants"],
+  parameterSize: string,
+) {
+  return (variants ?? []).filter(
+    (variant) =>
+      variant.tag === parameterSize ||
+      variant.tag.startsWith(`${parameterSize}-`),
+  );
+}
+
 function ModelSelector({
   models,
   model,
@@ -141,9 +152,10 @@ export default function WorkspaceViews({
   const [selectedModelSizes, setSelectedModelSizes] = useState<
     Record<string, string>
   >({});
-  const [choosingModelVariant, setChoosingModelVariant] = useState<
-    string | null
-  >(null);
+  const [choosingModelVariant, setChoosingModelVariant] = useState<{
+    modelName: string;
+    parameterSize: string | null;
+  } | null>(null);
   const catalogEndRef = useRef<HTMLDivElement>(null);
   const loadMoreCatalogRef = useRef(loadMoreCatalog);
   const autoLoadPending = useRef(false);
@@ -260,22 +272,27 @@ export default function WorkspaceViews({
           <tbody>
             {catalog.state === "loaded" &&
               catalog.models.map((model) => {
-                const selectedSize = model.sizes.includes(
-                  selectedModelSizes[model.name] ?? "",
-                )
-                  ? selectedModelSizes[model.name]
-                  : model.sizes.length === 1
-                    ? model.sizes[0]
-                    : (model.sizes.find((size) =>
-                        models.includes(`${model.name}:${size}`),
-                      ) ?? "");
-                const targetModel = selectedSize
-                  ? `${model.name}:${selectedSize}`
+                const savedTag = selectedModelSizes[model.name] ?? "";
+                const selectedTag =
+                  model.sizes.includes(savedTag) ||
+                  model.variants?.some((variant) => variant.tag === savedTag)
+                    ? savedTag
+                    : model.sizes.length === 1
+                      ? model.sizes[0]
+                      : (model.sizes.find((size) =>
+                          models.includes(`${model.name}:${size}`),
+                        ) ?? "");
+                const selectedParameterSize = model.sizes.find(
+                  (size) =>
+                    selectedTag === size || selectedTag.startsWith(`${size}-`),
+                );
+                const targetModel = selectedTag
+                  ? `${model.name}:${selectedTag}`
                   : model.name;
                 const installed = models.some(
                   (name) =>
                     name === targetModel ||
-                    (!selectedSize && name === `${model.name}:latest`),
+                    (!selectedTag && name === `${model.name}:latest`),
                 );
                 const task = downloads.find(
                   (item) =>
@@ -286,9 +303,9 @@ export default function WorkspaceViews({
                           item.state,
                         ))),
                 );
-                const selectedDownloadSize = selectedSize
+                const selectedDownloadSize = selectedTag
                   ? (model.variants?.find(
-                      (variant) => variant.tag === selectedSize,
+                      (variant) => variant.tag === selectedTag,
                     )?.downloadSize ?? "-")
                   : (model.downloadSize ?? "-");
                 const sizeOptions = model.sizes.map((size) => {
@@ -300,6 +317,24 @@ export default function WorkspaceViews({
                     label: downloadSize ? `${size} · ${downloadSize}` : size,
                   };
                 });
+                const quantizationOptions =
+                  choosingModelVariant?.modelName === model.name &&
+                  choosingModelVariant.parameterSize
+                    ? variantsForParameter(
+                        model.variants,
+                        choosingModelVariant.parameterSize,
+                      )
+                    : [];
+                const recommendedTag = choosingModelVariant?.parameterSize
+                  ? (quantizationOptions.find((variant) =>
+                      variant.tag.toLowerCase().endsWith("-q4_k_m"),
+                    )?.tag ??
+                    quantizationOptions.find(
+                      (variant) =>
+                        variant.tag === choosingModelVariant.parameterSize,
+                    )?.tag ??
+                    quantizationOptions[0]?.tag)
+                  : undefined;
                 return (
                   <tr key={model.name}>
                     <th scope="row">
@@ -312,40 +347,118 @@ export default function WorkspaceViews({
                               {model.sizes.join(" · ")}
                             </span>
                           )}
-                          {choosingModelVariant === model.name &&
-                            model.sizes.length > 1 && (
-                              <div className="model-variant-picker">
-                                <span className="variant-choice-label">
-                                  {t("Select model size")}
-                                </span>
-                                <div
-                                  className="model-variant-options"
-                                  role="group"
-                                  aria-label={`${t("Select model size")}: ${model.name}`}
-                                >
-                                  {sizeOptions.map((option) => (
+                          {choosingModelVariant?.modelName === model.name && (
+                            <div className="model-variant-picker">
+                              {choosingModelVariant.parameterSize === null ? (
+                                <>
+                                  <span className="variant-choice-label">
+                                    {t("Select model size")}
+                                  </span>
+                                  <div
+                                    className="model-variant-options"
+                                    role="group"
+                                    aria-label={`${t("Select model size")}: ${model.name}`}
+                                  >
+                                    {sizeOptions.map((option) => (
+                                      <button
+                                        className="model-variant-option"
+                                        type="button"
+                                        key={option.value}
+                                        disabled={!connected}
+                                        onClick={() => {
+                                          const variants = variantsForParameter(
+                                            model.variants,
+                                            option.value,
+                                          );
+                                          if (variants.length > 1) {
+                                            setChoosingModelVariant({
+                                              modelName: model.name,
+                                              parameterSize: option.value,
+                                            });
+                                            return;
+                                          }
+                                          const tag =
+                                            variants[0]?.tag ?? option.value;
+                                          setSelectedModelSizes((current) => ({
+                                            ...current,
+                                            [model.name]: tag,
+                                          }));
+                                          setChoosingModelVariant(null);
+                                          startDownload(`${model.name}:${tag}`);
+                                        }}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="variant-choice-label">
+                                    {t("Select quantization version")}
+                                  </span>
+                                  <div
+                                    className="model-variant-options quantization-options"
+                                    role="group"
+                                    aria-label={`${t("Select quantization version")}: ${model.name}:${choosingModelVariant.parameterSize}`}
+                                  >
+                                    {quantizationOptions.map((variant) => {
+                                      const recommended =
+                                        variant.tag === recommendedTag;
+                                      return (
+                                        <button
+                                          className={`model-variant-option quantization-option${recommended ? " recommended" : ""}`}
+                                          type="button"
+                                          key={variant.tag}
+                                          disabled={!connected}
+                                          aria-label={`${model.name}:${variant.tag} · ${variant.downloadSize ?? t("Size unavailable")}${recommended ? ` · ${t("Recommended")}` : ""}`}
+                                          onClick={() => {
+                                            setSelectedModelSizes(
+                                              (current) => ({
+                                                ...current,
+                                                [model.name]: variant.tag,
+                                              }),
+                                            );
+                                            setChoosingModelVariant(null);
+                                            startDownload(
+                                              `${model.name}:${variant.tag}`,
+                                            );
+                                          }}
+                                        >
+                                          <span className="quantization-tag">
+                                            {model.name}:{variant.tag}
+                                          </span>
+                                          <span className="quantization-size">
+                                            {variant.downloadSize ??
+                                              t("Size unavailable")}
+                                          </span>
+                                          {recommended && (
+                                            <span className="quantization-recommended">
+                                              {t("Recommended")}
+                                            </span>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  {model.sizes.length > 1 && (
                                     <button
-                                      className="model-variant-option"
+                                      className="variant-back-button"
                                       type="button"
-                                      key={option.value}
-                                      disabled={!connected}
-                                      onClick={() => {
-                                        setSelectedModelSizes((current) => ({
-                                          ...current,
-                                          [model.name]: option.value,
-                                        }));
-                                        setChoosingModelVariant(null);
-                                        startDownload(
-                                          `${model.name}:${option.value}`,
-                                        );
-                                      }}
+                                      onClick={() =>
+                                        setChoosingModelVariant({
+                                          modelName: model.name,
+                                          parameterSize: null,
+                                        })
+                                      }
                                     >
-                                      {option.label}
+                                      {t("Change model size")}
                                     </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
                             task?.state === "paused") && (
@@ -502,7 +615,7 @@ export default function WorkspaceViews({
                             <X size={15} aria-hidden="true" />
                           </button>
                         </div>
-                      ) : choosingModelVariant === model.name ? (
+                      ) : choosingModelVariant?.modelName === model.name ? (
                         <button
                           className="icon-button destructive"
                           type="button"
@@ -523,8 +636,24 @@ export default function WorkspaceViews({
                           )}
                           disabled={!connected}
                           onClick={() => {
-                            if (model.sizes.length > 1 && !selectedSize) {
-                              setChoosingModelVariant(model.name);
+                            if (!selectedTag && model.sizes.length > 1) {
+                              setChoosingModelVariant({
+                                modelName: model.name,
+                                parameterSize: null,
+                              });
+                              return;
+                            }
+                            if (
+                              selectedParameterSize &&
+                              variantsForParameter(
+                                model.variants,
+                                selectedParameterSize,
+                              ).length > 1
+                            ) {
+                              setChoosingModelVariant({
+                                modelName: model.name,
+                                parameterSize: selectedParameterSize,
+                              });
                               return;
                             }
                             startDownload(targetModel);
