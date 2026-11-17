@@ -87,7 +87,13 @@ function parseCatalogSizeValues(value: string | null | undefined) {
 }
 
 function modelCatalogSize(model: CatalogModel) {
-  const sizes = (model.variants ?? []).flatMap((variant) =>
+  const variants = model.variants ?? [];
+  const parameterVariants = variants.filter((variant) =>
+    model.sizes.includes(variant.tag),
+  );
+  const summaryVariants =
+    parameterVariants.length > 0 ? parameterVariants : variants;
+  const sizes = summaryVariants.flatMap((variant) =>
     parseCatalogSizeValues(variant.downloadSize),
   );
   if (sizes.length === 0) return model.downloadSize ?? "-";

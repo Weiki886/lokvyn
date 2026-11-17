@@ -858,6 +858,59 @@ describe("desktop workspace", () => {
     ).toBe("1GB - 6GB");
   });
 
+  it("excludes quantization tag sizes from the parameter-size summary", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "autotrust-jev",
+                    description: "Decision model family.",
+                    capabilities: ["decision"],
+                    downloads: "51K",
+                    sizes: ["9b", "35b"],
+                    downloadSize: "11GB",
+                    variants: [
+                      { tag: "9b", downloadSize: "11GB" },
+                      { tag: "9b-q2_K", downloadSize: "8GB" },
+                      { tag: "9b-q8_0", downloadSize: "17GB" },
+                      { tag: "35b", downloadSize: "26GB" },
+                      { tag: "35b-q2_K", downloadSize: "20GB" },
+                      { tag: "35b-q8_0", downloadSize: "39GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(
+      await screen.findByRole("row", { name: /autotrust-jev/ }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /autotrust-jev/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("11GB - 26GB");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Download autotrust-jev" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "9b · 11GB" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "35b · 26GB" })).toBeTruthy();
+  });
+
   it("offers exact quantization tags and sizes after choosing a parameter size", async () => {
     vi.mocked(invoke).mockImplementation((command) =>
       Promise.resolve(
@@ -909,7 +962,7 @@ describe("desktop workspace", () => {
     expect(
       screen.getByRole("row", { name: /tev1/ }).querySelector(".directory-size")
         ?.textContent,
-    ).toBe("834MB - 8.7GB");
+    ).toBe("834MB - 4.6GB");
     expect(
       screen.getByRole("button", { name: /tev1:4b-q8_0.*4.6GB/ }),
     ).toBeTruthy();
