@@ -960,6 +960,15 @@ h1 {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.model-variant-picker {
+  width: min(100%, 240px);
+  margin-top: 8px;
+}
+.model-variant-picker .form-select {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
 .model-directory .directory-size {
   width: 92px;
   color: var(--subtle);

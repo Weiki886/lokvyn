@@ -95,9 +95,20 @@ fn element_text(element: scraper::ElementRef<'_>) -> String {
 }
 
 fn valid_download_size(value: &str) -> bool {
+    let value = value.trim();
+    if let Some((minimum, maximum)) = [" - ", " – ", " — "]
+        .iter()
+        .find_map(|separator| value.split_once(separator))
+    {
+        return valid_single_download_size(minimum) && valid_single_download_size(maximum);
+    }
+    valid_single_download_size(value)
+}
+
+fn valid_single_download_size(value: &str) -> bool {
     let Some(number) = ["TB", "GB", "MB", "KB", "B"]
         .iter()
-        .find_map(|unit| value.strip_suffix(unit))
+        .find_map(|unit| value.trim().strip_suffix(unit))
     else {
         return false;
     };
@@ -109,36 +120,75 @@ fn valid_download_size(value: &str) -> bool {
         && number.chars().any(|character| character.is_ascii_digit())
 }
 
+#[derive(Debug, PartialEq)]
+struct ModelVariant {
+    tag: String,
+    download_size: Option<String>,
+}
+
 fn parse_default_download_size(html: &str, model_name: &str) -> Option<String> {
+    parse_model_variants(html, model_name)
+        .into_iter()
+        .find(|variant| variant.tag == "latest")
+        .and_then(|variant| variant.download_size)
+}
+
+fn parse_model_variants(html: &str, model_name: &str) -> Vec<ModelVariant> {
     if model_name.is_empty()
         || !model_name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
     {
-        return None;
+        return Vec::new();
     }
     let document = Html::parse_document(html);
-    let tag_selector =
-        Selector::parse(&format!("a[href=\"/library/{model_name}:latest\"]")).ok()?;
-    let size_selector = Selector::parse("p.col-span-2").ok()?;
-    for tag_link in document.select(&tag_selector) {
-        let mut parent = tag_link.parent();
-        while let Some(node) = parent {
-            parent = node.parent();
-            let Some(element) = scraper::ElementRef::wrap(node) else {
-                continue;
-            };
-            if let Some(size) = element
-                .select(&size_selector)
-                .next()
-                .map(element_text)
-                .filter(|value| valid_download_size(value))
-            {
-                return Some(size);
-            }
+    let group_selector = match Selector::parse("div.group.px-4.py-3") {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let tag_selector = match Selector::parse(&format!("a[href^=\"/library/{model_name}:\"]")) {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let size_selector = match Selector::parse("p.col-span-2") {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let href_prefix = format!("/library/{model_name}:");
+    let mut variants = Vec::new();
+    for group in document.select(&group_selector) {
+        let Some(tag) = group
+            .select(&tag_selector)
+            .next()
+            .and_then(|link| link.value().attr("href"))
+            .and_then(|href| href.strip_prefix(&href_prefix))
+            .filter(|tag| {
+                !tag.is_empty()
+                    && tag.len() <= 128
+                    && tag.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "._-".contains(character)
+                    })
+            })
+        else {
+            continue;
+        };
+        if variants
+            .iter()
+            .any(|variant: &ModelVariant| variant.tag == tag)
+        {
+            continue;
         }
+        let download_size = group
+            .select(&size_selector)
+            .next()
+            .map(element_text)
+            .filter(|value| valid_download_size(value));
+        variants.push(ModelVariant {
+            tag: tag.to_owned(),
+            download_size,
+        });
     }
-    None
+    variants
 }
 
 fn catalog_query_params(
@@ -257,6 +307,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 "downloads": model.downloads,
                 "sizes": model.sizes,
                 "downloadSize": model.download_size,
+                "variants": [],
             })
         })
         .collect::<Vec<_>>();
@@ -652,7 +703,10 @@ async fn ollama_catalog(
     Ok(catalog)
 }
 
-async fn fetch_default_download_size(client: &reqwest::Client, model_name: &str) -> Option<String> {
+async fn fetch_model_variants(
+    client: &reqwest::Client,
+    model_name: &str,
+) -> Option<Vec<ModelVariant>> {
     let url = format!("https://ollama.com/library/{model_name}/tags");
     let mut response = client
         .get(url)
@@ -675,7 +729,7 @@ async fn fetch_default_download_size(client: &reqwest::Client, model_name: &str)
         html.extend_from_slice(&chunk);
     }
     let html = std::str::from_utf8(&html).ok()?;
-    parse_default_download_size(html, model_name)
+    Some(parse_model_variants(html, model_name))
 }
 
 async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut serde_json::Value) {
@@ -704,14 +758,14 @@ async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut s
         let semaphore = semaphore.clone();
         tasks.spawn(async move {
             let _permit = semaphore.acquire_owned().await.ok()?;
-            let size = fetch_default_download_size(&client, &model_name).await;
-            Some((model_name, size))
+            let variants = fetch_model_variants(&client, &model_name).await;
+            Some((model_name, variants))
         });
     }
     let mut download_sizes = HashMap::new();
     while let Some(result) = tasks.join_next().await {
-        if let Ok(Some((name, size))) = result {
-            download_sizes.insert(name, size);
+        if let Ok(Some((name, Some(variants)))) = result {
+            download_sizes.insert(name, variants);
         }
     }
     if let Some(models) = catalog
@@ -722,8 +776,23 @@ async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut s
             let Some(name) = model.get("name").and_then(serde_json::Value::as_str) else {
                 continue;
             };
-            if let Some(size) = download_sizes.get(name).and_then(Option::as_ref) {
-                model["downloadSize"] = serde_json::Value::String(size.clone());
+            if let Some(variants) = download_sizes.get(name) {
+                model["variants"] = serde_json::json!(variants
+                    .iter()
+                    .map(|variant| {
+                        serde_json::json!({
+                            "tag": variant.tag,
+                            "downloadSize": variant.download_size,
+                        })
+                    })
+                    .collect::<Vec<_>>());
+                if let Some(size) = variants
+                    .iter()
+                    .find(|variant| variant.tag == "latest")
+                    .and_then(|variant| variant.download_size.as_ref())
+                {
+                    model["downloadSize"] = serde_json::Value::String(size.clone());
+                }
             }
         }
     }
@@ -1040,6 +1109,7 @@ mod tests {
                 "downloads": "6,522,021 downloads",
                 "sizes": ["27b"],
                 "downloadSize": null,
+                "variants": [],
             })
         );
     }
@@ -1081,6 +1151,56 @@ mod tests {
 
         assert_eq!(parse_default_download_size(missing_latest, "qwen3"), None);
         assert_eq!(parse_default_download_size(invalid_size, "qwen3"), None);
+    }
+
+    #[test]
+    fn accepts_download_size_ranges() {
+        assert!(valid_download_size("39GB - 46GB"));
+        assert!(valid_download_size("130GB - 138GB"));
+        assert!(!valid_download_size("39GB - unknown"));
+    }
+
+    #[test]
+    fn parses_parameter_tags_and_download_sizes_from_ollama_tags_page() {
+        let html = r#"
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:latest">ripple-preview:latest</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB - 46GB</p>
+              </div>
+            </div>
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:65b">ripple-preview:65b</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB - 46GB</p>
+              </div>
+            </div>
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:65b-q4_K_M">ripple-preview:65b-q4_K_M</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB</p>
+              </div>
+            </div>
+            <a href="/library/other:8b">other:8b</a>
+        "#;
+
+        assert_eq!(
+            parse_model_variants(html, "ripple-preview"),
+            vec![
+                ModelVariant {
+                    tag: "latest".into(),
+                    download_size: Some("39GB - 46GB".into()),
+                },
+                ModelVariant {
+                    tag: "65b".into(),
+                    download_size: Some("39GB - 46GB".into()),
+                },
+                ModelVariant {
+                    tag: "65b-q4_K_M".into(),
+                    download_size: Some("39GB".into()),
+                },
+            ]
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ export type CatalogModel = {
   downloads: string | null;
   sizes: string[];
   downloadSize?: string | null;
+  variants?: { tag: string; downloadSize: string | null }[];
 };
 
 type Catalog = {
@@ -137,6 +138,9 @@ export default function WorkspaceViews({
 }) {
   const t = (source: string) => translate(locale, source);
   const [apiModel, setApiModel] = useState("");
+  const [selectedModelSizes, setSelectedModelSizes] = useState<
+    Record<string, string>
+  >({});
   const catalogEndRef = useRef<HTMLDivElement>(null);
   const loadMoreCatalogRef = useRef(loadMoreCatalog);
   const autoLoadPending = useRef(false);
@@ -253,12 +257,46 @@ export default function WorkspaceViews({
           <tbody>
             {catalog.state === "loaded" &&
               catalog.models.map((model) => {
+                const selectedSize = model.sizes.includes(
+                  selectedModelSizes[model.name] ?? "",
+                )
+                  ? selectedModelSizes[model.name]
+                  : model.sizes.length === 1
+                    ? model.sizes[0]
+                    : (model.sizes.find((size) =>
+                        models.includes(`${model.name}:${size}`),
+                      ) ?? "");
+                const targetModel = selectedSize
+                  ? `${model.name}:${selectedSize}`
+                  : model.name;
                 const installed = models.some(
-                  (name) => name.split(":")[0] === model.name,
+                  (name) =>
+                    name === targetModel ||
+                    (!selectedSize && name === `${model.name}:latest`),
                 );
                 const task = downloads.find(
-                  (item) => !model.cloud && item.model === model.name,
+                  (item) =>
+                    !model.cloud &&
+                    (item.model === targetModel ||
+                      (item.model.split(":")[0] === model.name &&
+                        ["queued", "downloading", "paused"].includes(
+                          item.state,
+                        ))),
                 );
+                const selectedDownloadSize = selectedSize
+                  ? (model.variants?.find(
+                      (variant) => variant.tag === selectedSize,
+                    )?.downloadSize ?? "-")
+                  : (model.downloadSize ?? "-");
+                const sizeOptions = model.sizes.map((size) => {
+                  const downloadSize = model.variants?.find(
+                    (variant) => variant.tag === size,
+                  )?.downloadSize;
+                  return {
+                    value: size,
+                    label: downloadSize ? `${size} · ${downloadSize}` : size,
+                  };
+                });
                 return (
                   <tr key={model.name}>
                     <th scope="row">
@@ -270,6 +308,26 @@ export default function WorkspaceViews({
                             <span className="model-size-hints">
                               {model.sizes.join(" · ")}
                             </span>
+                          )}
+                          {model.sizes.length > 1 && (
+                            <div className="model-variant-picker">
+                              <Select
+                                label={`${t("Select model size")}: ${model.name}`}
+                                value={selectedSize}
+                                options={sizeOptions}
+                                disabled={
+                                  task?.state === "queued" ||
+                                  task?.state === "downloading" ||
+                                  task?.state === "paused"
+                                }
+                                onChange={(size) =>
+                                  setSelectedModelSizes((current) => ({
+                                    ...current,
+                                    [model.name]: size,
+                                  }))
+                                }
+                              />
+                            </div>
                           )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
@@ -354,9 +412,7 @@ export default function WorkspaceViews({
                         ))}
                       </div>
                     </td>
-                    <td className="directory-size">
-                      {model.downloadSize ?? "-"}
-                    </td>
+                    <td className="directory-size">{selectedDownloadSize}</td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
                     </td>
@@ -381,7 +437,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Pause")} ${model.name}`}
                             title={t("Pause")}
-                            onClick={() => pauseDownload(model.name)}
+                            onClick={() => pauseDownload(task.model)}
                           >
                             <Pause size={15} aria-hidden="true" />
                           </button>
@@ -390,7 +446,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -403,7 +459,7 @@ export default function WorkspaceViews({
                             aria-label={`${t("Resume")} ${model.name}`}
                             title={t("Resume")}
                             disabled={!connected}
-                            onClick={() => startDownload(model.name)}
+                            onClick={() => startDownload(task.model)}
                           >
                             <Play size={15} aria-hidden="true" />
                           </button>
@@ -412,7 +468,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -424,7 +480,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -438,8 +494,11 @@ export default function WorkspaceViews({
                               ? "Retry download"
                               : "Download model",
                           )}
-                          disabled={!connected}
-                          onClick={() => startDownload(model.name)}
+                          disabled={
+                            !connected ||
+                            (model.sizes.length > 1 && !selectedSize)
+                          }
+                          onClick={() => startDownload(targetModel)}
                         >
                           <ArrowDownToLine size={17} />
                         </button>

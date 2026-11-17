@@ -519,6 +519,11 @@ describe("desktop workspace", () => {
                         downloads: "25.8M",
                         sizes: ["8b", "14b"],
                         downloadSize: "5.2GB",
+                        variants: [
+                          { tag: "8b", downloadSize: "5.2GB" },
+                          { tag: "14b", downloadSize: "9.3GB" },
+                          { tag: "latest", downloadSize: "5.2GB" },
+                        ],
                       },
                       {
                         name: "gemma4",
@@ -733,7 +738,7 @@ describe("desktop workspace", () => {
           .mock.calls.some(
             ([name, args]) =>
               name === "ollama_pull_model" &&
-              (args as { modelName?: string }).modelName === "qwen3",
+              (args as { modelName?: string }).modelName === "qwen3:8b",
           ),
       ).toBe(true),
     );
@@ -742,6 +747,68 @@ describe("desktop workspace", () => {
     );
     expect(await screen.findByText("Download complete")).toBeTruthy();
     expect(screen.getByText("completed")).toBeTruthy();
+  });
+
+  it("requires a parameter choice and pulls the matching Ollama tag", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "qwen3",
+                    description: "Reasoning model.",
+                    capabilities: ["thinking"],
+                    downloads: "25.8M",
+                    sizes: ["4b", "8b"],
+                    downloadSize: "5.2GB",
+                    variants: [
+                      { tag: "4b", downloadSize: "2.5GB - 3GB" },
+                      { tag: "8b", downloadSize: "5.2GB" },
+                      { tag: "latest", downloadSize: "5.2GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    const download = await screen.findByRole("button", {
+      name: "Download qwen3",
+    });
+    expect(download.hasAttribute("disabled")).toBe(true);
+    const sizePicker = screen.getByRole("combobox", {
+      name: "Select model size: qwen3",
+    });
+    fireEvent.click(sizePicker);
+    fireEvent.click(screen.getByRole("option", { name: "4b · 2.5GB - 3GB" }));
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("2.5GB - 3GB");
+    fireEvent.click(download);
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([name, args]) =>
+              name === "ollama_pull_model" &&
+              (args as { modelName?: string }).modelName === "qwen3:4b",
+          ),
+      ).toBe(true),
+    );
   });
 
   it("shows download progress only on the model being pulled", async () => {
@@ -1027,7 +1094,7 @@ describe("desktop workspace", () => {
     await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
     act(() =>
       reportProgress?.({
-        model: "qwen3",
+        model: "qwen3:8b",
         status: "downloading",
         message: "pulling model layers",
         completed: 3,
