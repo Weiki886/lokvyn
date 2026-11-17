@@ -128,7 +128,7 @@ struct ModelVariant {
 
 fn default_download_size(variants: &[ModelVariant]) -> Option<String> {
     variants
-        .into_iter()
+        .iter()
         .find(|variant| variant.tag == "latest")
         .and_then(|variant| variant.download_size.clone())
 }
