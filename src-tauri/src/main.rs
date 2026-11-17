@@ -126,11 +126,11 @@ struct ModelVariant {
     download_size: Option<String>,
 }
 
-fn parse_default_download_size(html: &str, model_name: &str) -> Option<String> {
-    parse_model_variants(html, model_name)
+fn default_download_size(variants: &[ModelVariant]) -> Option<String> {
+    variants
         .into_iter()
         .find(|variant| variant.tag == "latest")
-        .and_then(|variant| variant.download_size)
+        .and_then(|variant| variant.download_size.clone())
 }
 
 fn parse_model_variants(html: &str, model_name: &str) -> Vec<ModelVariant> {
@@ -786,12 +786,8 @@ async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut s
                         })
                     })
                     .collect::<Vec<_>>());
-                if let Some(size) = variants
-                    .iter()
-                    .find(|variant| variant.tag == "latest")
-                    .and_then(|variant| variant.download_size.as_ref())
-                {
-                    model["downloadSize"] = serde_json::Value::String(size.clone());
+                if let Some(size) = default_download_size(variants) {
+                    model["downloadSize"] = serde_json::Value::String(size);
                 }
             }
         }
@@ -1129,7 +1125,7 @@ mod tests {
         "#;
 
         assert_eq!(
-            parse_default_download_size(html, "qwen3"),
+            default_download_size(&parse_model_variants(html, "qwen3")),
             Some("5.2GB".into())
         );
     }
@@ -1137,20 +1133,26 @@ mod tests {
     #[test]
     fn omits_download_size_when_default_tag_or_valid_size_is_missing() {
         let missing_latest = r#"
-            <div class="grid grid-cols-12 items-center">
+            <div class="group px-4 py-3">
               <a href="/library/qwen3:8b">qwen3:8b</a>
               <p class="col-span-2">5.2GB</p>
             </div>
         "#;
         let invalid_size = r#"
-            <div class="grid grid-cols-12 items-center">
+            <div class="group px-4 py-3">
               <a href="/library/qwen3:latest">qwen3:latest</a>
               <p class="col-span-2">unknown</p>
             </div>
         "#;
 
-        assert_eq!(parse_default_download_size(missing_latest, "qwen3"), None);
-        assert_eq!(parse_default_download_size(invalid_size, "qwen3"), None);
+        assert_eq!(
+            default_download_size(&parse_model_variants(missing_latest, "qwen3")),
+            None
+        );
+        assert_eq!(
+            default_download_size(&parse_model_variants(invalid_size, "qwen3")),
+            None
+        );
     }
 
     #[test]
