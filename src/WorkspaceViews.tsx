@@ -66,6 +66,43 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
+function parseCatalogSizeValues(value: string | null | undefined) {
+  const unitMultipliers: Record<string, number> = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+  return [...(value ?? "").matchAll(/(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|B)\b/gi)]
+    .map((match) => {
+      const unit = match[2].toUpperCase();
+      const amount = Number(match[1]);
+      return {
+        bytes: amount * unitMultipliers[unit],
+        label: `${match[1]}${unit}`,
+      };
+    })
+    .filter((size) => Number.isFinite(size.bytes));
+}
+
+function modelCatalogSize(model: CatalogModel) {
+  const sizes = (model.variants ?? []).flatMap((variant) =>
+    parseCatalogSizeValues(variant.downloadSize),
+  );
+  if (sizes.length === 0) return model.downloadSize ?? "-";
+
+  const smallest = sizes.reduce((current, size) =>
+    size.bytes < current.bytes ? size : current,
+  );
+  const largest = sizes.reduce((current, size) =>
+    size.bytes > current.bytes ? size : current,
+  );
+  return smallest.bytes === largest.bytes
+    ? smallest.label
+    : `${smallest.label} - ${largest.label}`;
+}
+
 function variantsForParameter(
   variants: CatalogModel["variants"],
   parameterSize: string,
@@ -303,11 +340,7 @@ export default function WorkspaceViews({
                           item.state,
                         ))),
                 );
-                const selectedDownloadSize = selectedTag
-                  ? (model.variants?.find(
-                      (variant) => variant.tag === selectedTag,
-                    )?.downloadSize ?? "-")
-                  : (model.downloadSize ?? "-");
+                const catalogSize = modelCatalogSize(model);
                 const sizeOptions = model.sizes.map((size) => {
                   const downloadSize = model.variants?.find(
                     (variant) => variant.tag === size,
@@ -542,7 +575,7 @@ export default function WorkspaceViews({
                         ))}
                       </div>
                     </td>
-                    <td className="directory-size">{selectedDownloadSize}</td>
+                    <td className="directory-size">{catalogSize}</td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
                     </td>

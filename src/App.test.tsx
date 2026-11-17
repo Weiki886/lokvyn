@@ -548,12 +548,12 @@ describe("desktop workspace", () => {
     expect(screen.getByText("gemma4")).toBeTruthy();
     expect(screen.getByText("Installed")).toBeTruthy();
     expect(screen.getByText("25.8M")).toBeTruthy();
-    expect(screen.getByText("5.2GB")).toBeTruthy();
+    expect(screen.getByText("5.2GB - 9.3GB")).toBeTruthy();
     expect(
       screen
         .getByRole("row", { name: /qwen3/ })
         .querySelector(".directory-size")?.textContent,
-    ).toBe("5.2GB");
+    ).toBe("5.2GB - 9.3GB");
     expect(
       screen
         .getByRole("row", { name: /qwen3/ })
@@ -765,9 +765,9 @@ describe("desktop workspace", () => {
                     sizes: ["4b", "8b"],
                     downloadSize: "5.2GB",
                     variants: [
-                      { tag: "4b", downloadSize: "2.5GB - 3GB" },
-                      { tag: "8b", downloadSize: "5.2GB" },
-                      { tag: "latest", downloadSize: "5.2GB" },
+                      { tag: "4b", downloadSize: "1GB - 2GB" },
+                      { tag: "8b", downloadSize: "5GB - 6GB" },
+                      { tag: "latest", downloadSize: "1GB - 2GB" },
                     ],
                   },
                 ],
@@ -791,14 +791,14 @@ describe("desktop workspace", () => {
     ).toBeNull();
     fireEvent.click(download);
     const variantChoice = await screen.findByRole("button", {
-      name: "4b · 2.5GB - 3GB",
+      name: "4b · 1GB - 2GB",
     });
     fireEvent.click(variantChoice);
     expect(
       screen
         .getByRole("row", { name: /qwen3/ })
         .querySelector(".directory-size")?.textContent,
-    ).toBe("2.5GB - 3GB");
+    ).toBe("1GB - 6GB");
 
     await waitFor(() =>
       expect(
@@ -811,6 +811,51 @@ describe("desktop workspace", () => {
           ),
       ).toBe(true),
     );
+  });
+
+  it("shows the smallest-to-largest catalog size across parameters and tags", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "range-model",
+                    description: "A model with multiple parameter sizes.",
+                    capabilities: ["chat"],
+                    downloads: "10K",
+                    sizes: ["5b", "6b"],
+                    downloadSize: "1GB - 2GB",
+                    variants: [
+                      { tag: "5b", downloadSize: "1GB - 2GB" },
+                      { tag: "5b-q4_K_M", downloadSize: "1.5GB" },
+                      { tag: "6b", downloadSize: "5GB - 6GB" },
+                      { tag: "6b-q4_K_M", downloadSize: "5.4GB" },
+                      { tag: "latest", downloadSize: "1GB - 2GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(
+      await screen.findByRole("row", { name: /range-model/ }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /range-model/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("1GB - 6GB");
   });
 
   it("offers exact quantization tags and sizes after choosing a parameter size", async () => {
@@ -861,6 +906,10 @@ describe("desktop workspace", () => {
         name: /tev1:4b-q4_K_M.*2.8GB.*Recommended/,
       }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("row", { name: /tev1/ }).querySelector(".directory-size")
+        ?.textContent,
+    ).toBe("834MB - 8.7GB");
     expect(
       screen.getByRole("button", { name: /tev1:4b-q8_0.*4.6GB/ }),
     ).toBeTruthy();
