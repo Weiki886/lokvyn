@@ -749,7 +749,7 @@ describe("desktop workspace", () => {
     expect(screen.getByText("completed")).toBeTruthy();
   });
 
-  it("requires a parameter choice and pulls the matching Ollama tag", async () => {
+  it("offers parameter choices from the download action and pulls the selected tag", async () => {
     vi.mocked(invoke).mockImplementation((command) =>
       Promise.resolve(
         command === "ollama_connection"
@@ -785,18 +785,20 @@ describe("desktop workspace", () => {
     const download = await screen.findByRole("button", {
       name: "Download qwen3",
     });
-    expect(download.hasAttribute("disabled")).toBe(true);
-    const sizePicker = screen.getByRole("combobox", {
-      name: "Select model size: qwen3",
+    expect(screen.queryByRole("combobox", { name: /qwen3/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "4b · 2.5GB - 3GB" }),
+    ).toBeNull();
+    fireEvent.click(download);
+    const variantChoice = await screen.findByRole("button", {
+      name: "4b · 2.5GB - 3GB",
     });
-    fireEvent.click(sizePicker);
-    fireEvent.click(screen.getByRole("option", { name: "4b · 2.5GB - 3GB" }));
+    fireEvent.click(variantChoice);
     expect(
       screen
         .getByRole("row", { name: /qwen3/ })
         .querySelector(".directory-size")?.textContent,
     ).toBe("2.5GB - 3GB");
-    fireEvent.click(download);
 
     await waitFor(() =>
       expect(

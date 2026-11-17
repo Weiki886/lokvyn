@@ -96,6 +96,7 @@ const chinese: Record<string, string> = {
   "Model directory": "模型目录",
   "Model family": "模型系列",
   "Select model size": "选择模型参数",
+  "Cancel size selection": "取消选择参数",
   Size: "大小",
   Focus: "适用方向",
   "models shown": "个模型",

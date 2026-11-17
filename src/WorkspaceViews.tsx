@@ -141,6 +141,9 @@ export default function WorkspaceViews({
   const [selectedModelSizes, setSelectedModelSizes] = useState<
     Record<string, string>
   >({});
+  const [choosingModelVariant, setChoosingModelVariant] = useState<
+    string | null
+  >(null);
   const catalogEndRef = useRef<HTMLDivElement>(null);
   const loadMoreCatalogRef = useRef(loadMoreCatalog);
   const autoLoadPending = useRef(false);
@@ -309,26 +312,40 @@ export default function WorkspaceViews({
                               {model.sizes.join(" · ")}
                             </span>
                           )}
-                          {model.sizes.length > 1 && (
-                            <div className="model-variant-picker">
-                              <Select
-                                label={`${t("Select model size")}: ${model.name}`}
-                                value={selectedSize}
-                                options={sizeOptions}
-                                disabled={
-                                  task?.state === "queued" ||
-                                  task?.state === "downloading" ||
-                                  task?.state === "paused"
-                                }
-                                onChange={(size) =>
-                                  setSelectedModelSizes((current) => ({
-                                    ...current,
-                                    [model.name]: size,
-                                  }))
-                                }
-                              />
-                            </div>
-                          )}
+                          {choosingModelVariant === model.name &&
+                            model.sizes.length > 1 && (
+                              <div className="model-variant-picker">
+                                <span className="variant-choice-label">
+                                  {t("Select model size")}
+                                </span>
+                                <div
+                                  className="model-variant-options"
+                                  role="group"
+                                  aria-label={`${t("Select model size")}: ${model.name}`}
+                                >
+                                  {sizeOptions.map((option) => (
+                                    <button
+                                      className="model-variant-option"
+                                      type="button"
+                                      key={option.value}
+                                      disabled={!connected}
+                                      onClick={() => {
+                                        setSelectedModelSizes((current) => ({
+                                          ...current,
+                                          [model.name]: option.value,
+                                        }));
+                                        setChoosingModelVariant(null);
+                                        startDownload(
+                                          `${model.name}:${option.value}`,
+                                        );
+                                      }}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
                             task?.state === "paused") && (
@@ -485,6 +502,16 @@ export default function WorkspaceViews({
                             <X size={15} aria-hidden="true" />
                           </button>
                         </div>
+                      ) : choosingModelVariant === model.name ? (
+                        <button
+                          className="icon-button destructive"
+                          type="button"
+                          aria-label={`${t("Cancel size selection")} ${model.name}`}
+                          title={t("Cancel size selection")}
+                          onClick={() => setChoosingModelVariant(null)}
+                        >
+                          <X size={15} aria-hidden="true" />
+                        </button>
                       ) : (
                         <button
                           className="icon-button"
@@ -494,11 +521,14 @@ export default function WorkspaceViews({
                               ? "Retry download"
                               : "Download model",
                           )}
-                          disabled={
-                            !connected ||
-                            (model.sizes.length > 1 && !selectedSize)
-                          }
-                          onClick={() => startDownload(targetModel)}
+                          disabled={!connected}
+                          onClick={() => {
+                            if (model.sizes.length > 1 && !selectedSize) {
+                              setChoosingModelVariant(model.name);
+                              return;
+                            }
+                            startDownload(targetModel);
+                          }}
                         >
                           <ArrowDownToLine size={17} />
                         </button>
