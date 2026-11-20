@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUp,
@@ -33,6 +33,8 @@ export type CatalogModel = {
   cloud?: boolean;
   downloads: string | null;
   sizes: string[];
+  downloadSize?: string | null;
+  variants?: { tag: string; downloadSize: string | null }[];
 };
 
 type Catalog = {
@@ -62,6 +64,60 @@ function formatBytes(bytes: number) {
     unit += 1;
   } while (value >= 1024 && unit < units.length - 1);
   return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+function parseCatalogSizeValues(value: string | null | undefined) {
+  const unitMultipliers: Record<string, number> = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+  return [...(value ?? "").matchAll(/(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|B)\b/gi)]
+    .map((match) => {
+      const unit = match[2].toUpperCase();
+      const amount = Number(match[1]);
+      return {
+        bytes: amount * unitMultipliers[unit],
+        label: `${match[1]}${unit}`,
+      };
+    })
+    .filter((size) => Number.isFinite(size.bytes));
+}
+
+function modelCatalogSize(model: CatalogModel) {
+  const variants = model.variants ?? [];
+  const parameterVariants = variants.filter((variant) =>
+    model.sizes.includes(variant.tag),
+  );
+  const summaryVariants =
+    parameterVariants.length > 0 ? parameterVariants : variants;
+  const sizes = summaryVariants.flatMap((variant) =>
+    parseCatalogSizeValues(variant.downloadSize),
+  );
+  if (sizes.length === 0) return model.downloadSize ?? "-";
+
+  const smallest = sizes.reduce((current, size) =>
+    size.bytes < current.bytes ? size : current,
+  );
+  const largest = sizes.reduce((current, size) =>
+    size.bytes > current.bytes ? size : current,
+  );
+  return smallest.bytes === largest.bytes
+    ? smallest.label
+    : `${smallest.label} - ${largest.label}`;
+}
+
+function variantsForParameter(
+  variants: CatalogModel["variants"],
+  parameterSize: string,
+) {
+  return (variants ?? []).filter(
+    (variant) =>
+      variant.tag === parameterSize ||
+      variant.tag.startsWith(`${parameterSize}-`),
+  );
 }
 
 function ModelSelector({
@@ -136,8 +192,64 @@ export default function WorkspaceViews({
 }) {
   const t = (source: string) => translate(locale, source);
   const [apiModel, setApiModel] = useState("");
+  const [selectedModelSizes, setSelectedModelSizes] = useState<
+    Record<string, string>
+  >({});
+  const [choosingModelVariant, setChoosingModelVariant] = useState<{
+    modelName: string;
+    parameterSize: string | null;
+  } | null>(null);
+  const catalogEndRef = useRef<HTMLDivElement>(null);
+  const loadMoreCatalogRef = useRef(loadMoreCatalog);
+  const autoLoadPending = useRef(false);
   const selectedChat = models.includes(chatModel) ? chatModel : "";
   const selectedApi = models.includes(apiModel) ? apiModel : "";
+  const cancelModelDownload = (model: string) => {
+    cancelDownload(model);
+    const modelName = model.split(":")[0];
+    setSelectedModelSizes((current) => {
+      if (!(modelName in current)) return current;
+      const next = { ...current };
+      delete next[modelName];
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    loadMoreCatalogRef.current = loadMoreCatalog;
+  }, [loadMoreCatalog]);
+
+  useEffect(() => {
+    if (!catalog.loadingMore) autoLoadPending.current = false;
+    if (
+      view !== "Discover" ||
+      catalog.state !== "loaded" ||
+      !catalog.hasMore ||
+      catalog.loadMoreError ||
+      catalog.loadingMore ||
+      !catalogEndRef.current ||
+      typeof IntersectionObserver === "undefined"
+    )
+      return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        !autoLoadPending.current
+      ) {
+        autoLoadPending.current = true;
+        loadMoreCatalogRef.current();
+      }
+    });
+    observer.observe(catalogEndRef.current);
+    return () => observer.disconnect();
+  }, [
+    catalog.hasMore,
+    catalog.loadMoreError,
+    catalog.loadingMore,
+    catalog.state,
+    view,
+  ]);
 
   if (view === "Discover") {
     return (
@@ -199,6 +311,9 @@ export default function WorkspaceViews({
               <th scope="col" className="directory-capability">
                 {t("Capability")}
               </th>
+              <th scope="col" className="directory-size">
+                {t("Size")}
+              </th>
               <th scope="col" className="directory-downloads">
                 {t("Downloads")}
               </th>
@@ -210,12 +325,65 @@ export default function WorkspaceViews({
           <tbody>
             {catalog.state === "loaded" &&
               catalog.models.map((model) => {
+                const savedTag = selectedModelSizes[model.name] ?? "";
+                const selectedTag =
+                  model.sizes.includes(savedTag) ||
+                  model.variants?.some((variant) => variant.tag === savedTag)
+                    ? savedTag
+                    : model.sizes.length === 1
+                      ? model.sizes[0]
+                      : (model.sizes.find((size) =>
+                          models.includes(`${model.name}:${size}`),
+                        ) ?? "");
+                const selectedParameterSize = model.sizes.find(
+                  (size) =>
+                    selectedTag === size || selectedTag.startsWith(`${size}-`),
+                );
+                const targetModel = selectedTag
+                  ? `${model.name}:${selectedTag}`
+                  : model.name;
                 const installed = models.some(
-                  (name) => name.split(":")[0] === model.name,
+                  (name) =>
+                    name === targetModel ||
+                    (!selectedTag && name === `${model.name}:latest`),
                 );
                 const task = downloads.find(
-                  (item) => !model.cloud && item.model === model.name,
+                  (item) =>
+                    !model.cloud &&
+                    (item.model === targetModel ||
+                      (item.model.split(":")[0] === model.name &&
+                        ["queued", "downloading", "paused"].includes(
+                          item.state,
+                        ))),
                 );
+                const catalogSize = modelCatalogSize(model);
+                const sizeOptions = model.sizes.map((size) => {
+                  const downloadSize = model.variants?.find(
+                    (variant) => variant.tag === size,
+                  )?.downloadSize;
+                  return {
+                    value: size,
+                    label: downloadSize ? `${size} · ${downloadSize}` : size,
+                  };
+                });
+                const quantizationOptions =
+                  choosingModelVariant?.modelName === model.name &&
+                  choosingModelVariant.parameterSize
+                    ? variantsForParameter(
+                        model.variants,
+                        choosingModelVariant.parameterSize,
+                      )
+                    : [];
+                const recommendedTag = choosingModelVariant?.parameterSize
+                  ? (quantizationOptions.find((variant) =>
+                      variant.tag.toLowerCase().endsWith("-q4_k_m"),
+                    )?.tag ??
+                    quantizationOptions.find(
+                      (variant) =>
+                        variant.tag === choosingModelVariant.parameterSize,
+                    )?.tag ??
+                    quantizationOptions[0]?.tag)
+                  : undefined;
                 return (
                   <tr key={model.name}>
                     <th scope="row">
@@ -227,6 +395,118 @@ export default function WorkspaceViews({
                             <span className="model-size-hints">
                               {model.sizes.join(" · ")}
                             </span>
+                          )}
+                          {choosingModelVariant?.modelName === model.name && (
+                            <div className="model-variant-picker">
+                              {choosingModelVariant.parameterSize === null ? (
+                                <>
+                                  <span className="variant-choice-label">
+                                    {t("Select model size")}
+                                  </span>
+                                  <div
+                                    className="model-variant-options"
+                                    role="group"
+                                    aria-label={`${t("Select model size")}: ${model.name}`}
+                                  >
+                                    {sizeOptions.map((option) => (
+                                      <button
+                                        className="model-variant-option"
+                                        type="button"
+                                        key={option.value}
+                                        disabled={!connected}
+                                        onClick={() => {
+                                          const variants = variantsForParameter(
+                                            model.variants,
+                                            option.value,
+                                          );
+                                          if (variants.length > 1) {
+                                            setChoosingModelVariant({
+                                              modelName: model.name,
+                                              parameterSize: option.value,
+                                            });
+                                            return;
+                                          }
+                                          const tag =
+                                            variants[0]?.tag ?? option.value;
+                                          setSelectedModelSizes((current) => ({
+                                            ...current,
+                                            [model.name]: tag,
+                                          }));
+                                          setChoosingModelVariant(null);
+                                          startDownload(`${model.name}:${tag}`);
+                                        }}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="variant-choice-label">
+                                    {t("Select quantization version")}
+                                  </span>
+                                  <div
+                                    className="model-variant-options quantization-options"
+                                    role="group"
+                                    aria-label={`${t("Select quantization version")}: ${model.name}:${choosingModelVariant.parameterSize}`}
+                                  >
+                                    {quantizationOptions.map((variant) => {
+                                      const recommended =
+                                        variant.tag === recommendedTag;
+                                      return (
+                                        <button
+                                          className={`model-variant-option quantization-option${recommended ? " recommended" : ""}`}
+                                          type="button"
+                                          key={variant.tag}
+                                          disabled={!connected}
+                                          aria-label={`${model.name}:${variant.tag} · ${variant.downloadSize ?? t("Size unavailable")}${recommended ? ` · ${t("Recommended")}` : ""}`}
+                                          onClick={() => {
+                                            setSelectedModelSizes(
+                                              (current) => ({
+                                                ...current,
+                                                [model.name]: variant.tag,
+                                              }),
+                                            );
+                                            setChoosingModelVariant(null);
+                                            startDownload(
+                                              `${model.name}:${variant.tag}`,
+                                            );
+                                          }}
+                                        >
+                                          <span className="quantization-tag">
+                                            {model.name}:{variant.tag}
+                                          </span>
+                                          <span className="quantization-size">
+                                            {variant.downloadSize ??
+                                              t("Size unavailable")}
+                                          </span>
+                                          {recommended && (
+                                            <span className="quantization-recommended">
+                                              {t("Recommended")}
+                                            </span>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  {model.sizes.length > 1 && (
+                                    <button
+                                      className="variant-back-button"
+                                      type="button"
+                                      onClick={() =>
+                                        setChoosingModelVariant({
+                                          modelName: model.name,
+                                          parameterSize: null,
+                                        })
+                                      }
+                                    >
+                                      {t("Change model size")}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
                           )}
                           {(task?.state === "queued" ||
                             task?.state === "downloading" ||
@@ -311,6 +591,7 @@ export default function WorkspaceViews({
                         ))}
                       </div>
                     </td>
+                    <td className="directory-size">{catalogSize}</td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
                     </td>
@@ -335,7 +616,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Pause")} ${model.name}`}
                             title={t("Pause")}
-                            onClick={() => pauseDownload(model.name)}
+                            onClick={() => pauseDownload(task.model)}
                           >
                             <Pause size={15} aria-hidden="true" />
                           </button>
@@ -344,7 +625,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -357,7 +638,7 @@ export default function WorkspaceViews({
                             aria-label={`${t("Resume")} ${model.name}`}
                             title={t("Resume")}
                             disabled={!connected}
-                            onClick={() => startDownload(model.name)}
+                            onClick={() => startDownload(task.model)}
                           >
                             <Play size={15} aria-hidden="true" />
                           </button>
@@ -366,7 +647,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -378,11 +659,21 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(model.name)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
                         </div>
+                      ) : choosingModelVariant?.modelName === model.name ? (
+                        <button
+                          className="icon-button destructive"
+                          type="button"
+                          aria-label={`${t("Cancel size selection")} ${model.name}`}
+                          title={t("Cancel size selection")}
+                          onClick={() => setChoosingModelVariant(null)}
+                        >
+                          <X size={15} aria-hidden="true" />
+                        </button>
                       ) : (
                         <button
                           className="icon-button"
@@ -393,7 +684,29 @@ export default function WorkspaceViews({
                               : "Download model",
                           )}
                           disabled={!connected}
-                          onClick={() => startDownload(model.name)}
+                          onClick={() => {
+                            if (!selectedTag && model.sizes.length > 1) {
+                              setChoosingModelVariant({
+                                modelName: model.name,
+                                parameterSize: null,
+                              });
+                              return;
+                            }
+                            if (
+                              selectedParameterSize &&
+                              variantsForParameter(
+                                model.variants,
+                                selectedParameterSize,
+                              ).length > 1
+                            ) {
+                              setChoosingModelVariant({
+                                modelName: model.name,
+                                parameterSize: selectedParameterSize,
+                              });
+                              return;
+                            }
+                            startDownload(targetModel);
+                          }}
                         >
                           <ArrowDownToLine size={17} />
                         </button>
@@ -428,21 +741,24 @@ export default function WorkspaceViews({
           </div>
         )}
         {catalog.state === "loaded" && catalog.hasMore && (
-          <div className="catalog-pagination">
-            {catalog.loadMoreError && (
-              <span role="status">{t("Could not load more models")}</span>
+          <div
+            className="catalog-pagination"
+            ref={catalogEndRef}
+            data-testid="catalog-end"
+          >
+            {catalog.loadingMore && (
+              <span className="catalog-loading" role="status">
+                {t("Loading...")}
+              </span>
             )}
-            <button
-              type="button"
-              onClick={loadMoreCatalog}
-              disabled={catalog.loadingMore}
-            >
-              {catalog.loadingMore
-                ? t("Loading...")
-                : catalog.loadMoreError
-                  ? t("Retry loading more")
-                  : t("Load more models")}
-            </button>
+            {catalog.loadMoreError && (
+              <>
+                <span role="status">{t("Could not load more models")}</span>
+                <button type="button" onClick={loadMoreCatalog}>
+                  {t("Retry loading more")}
+                </button>
+              </>
+            )}
           </div>
         )}
       </section>
@@ -533,7 +849,7 @@ export default function WorkspaceViews({
                     <button
                       type="button"
                       aria-label={`${t("Cancel download")} ${task.model}`}
-                      onClick={() => cancelDownload(task.model)}
+                      onClick={() => cancelModelDownload(task.model)}
                     >
                       <X size={15} />
                       {t("Cancel download")}
@@ -554,7 +870,7 @@ export default function WorkspaceViews({
                     <button
                       type="button"
                       aria-label={`${t("Cancel download")} ${task.model}`}
-                      onClick={() => cancelDownload(task.model)}
+                      onClick={() => cancelModelDownload(task.model)}
                     >
                       <X size={15} />
                       {t("Cancel download")}

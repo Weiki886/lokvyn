@@ -37,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -483,33 +484,59 @@ describe("desktop workspace", () => {
   });
 
   it("loads live catalog results, searches remotely, and shows installed state", async () => {
-    vi.mocked(invoke).mockImplementation((command) =>
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    let failNextPage = true;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionCallback = callback;
+        }
+
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    vi.mocked(invoke).mockImplementation((command, args) =>
       Promise.resolve(
         command === "ollama_connection"
           ? "0.1.0"
           : command === "ollama_models"
             ? [ollamaModel("qwen3:8b")]
             : command === "ollama_catalog"
-              ? {
-                  models: [
-                    {
-                      name: "qwen3",
-                      description: "A reasoning model family.",
-                      capabilities: ["thinking", "tools"],
-                      downloads: "25.8M",
-                      sizes: ["8b", "14b"],
-                    },
-                    {
-                      name: "gemma4",
-                      description: "An open model family.",
-                      capabilities: ["vision"],
-                      downloads: "2.1M",
-                      sizes: ["4b"],
-                    },
-                  ],
-                  page: 1,
-                  hasMore: true,
-                }
+              ? (args as { page?: number }).page === 2 && failNextPage
+                ? ((failNextPage = false), Promise.reject(new Error("network")))
+                : {
+                    models: [
+                      {
+                        name: "qwen3",
+                        description: "A reasoning model family.",
+                        capabilities: ["thinking", "tools"],
+                        downloads: "25.8M",
+                        sizes: ["8b", "14b"],
+                        downloadSize: "5.2GB",
+                        variants: [
+                          { tag: "8b", downloadSize: "5.2GB" },
+                          { tag: "14b", downloadSize: "9.3GB" },
+                          { tag: "latest", downloadSize: "5.2GB" },
+                        ],
+                      },
+                      {
+                        name: "gemma4",
+                        description: "An open model family.",
+                        capabilities: ["vision"],
+                        downloads: "2.1M",
+                        sizes: [],
+                        downloadSize: null,
+                      },
+                    ],
+                    page: (args as { page?: number }).page ?? 1,
+                    hasMore: true,
+                  }
               : [],
       ),
     );
@@ -521,6 +548,26 @@ describe("desktop workspace", () => {
     expect(screen.getByText("gemma4")).toBeTruthy();
     expect(screen.getByText("Installed")).toBeTruthy();
     expect(screen.getByText("25.8M")).toBeTruthy();
+    expect(screen.getByText("5.2GB - 9.3GB")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("5.2GB - 9.3GB");
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".model-size-hints")?.textContent,
+    ).toBe("8b · 14b");
+    expect(
+      screen
+        .getByRole("row", { name: /gemma4/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("-");
+    expect(screen.getByRole("columnheader", { name: "Size" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Load more models" }),
+    ).toBeNull();
     const search = screen.getByRole("searchbox", { name: "Search models" });
     fireEvent.change(search, { target: { value: "qwen" } });
     await waitFor(() => {
@@ -534,9 +581,21 @@ describe("desktop workspace", () => {
           ),
       ).toBe(true);
     });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Load more models" }),
-    );
+    const catalogEnd = await screen.findByTestId("catalog-end");
+    act(() => {
+      intersectionCallback?.(
+        [
+          {
+            isIntersecting: true,
+            target: catalogEnd,
+          } as unknown as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      );
+    });
+    const retryLoad = await screen.findByRole("button", {
+      name: "Retry loading more",
+    });
     await waitFor(() =>
       expect(
         vi
@@ -547,6 +606,18 @@ describe("desktop workspace", () => {
               (args as { page?: number }).page === 2,
           ),
       ).toBe(true),
+    );
+    fireEvent.click(retryLoad);
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([name, args]) =>
+              name === "ollama_catalog" &&
+              (args as { page?: number }).page === 2,
+          ),
+      ).toHaveLength(2),
     );
     fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
     expect(
@@ -667,7 +738,7 @@ describe("desktop workspace", () => {
           .mock.calls.some(
             ([name, args]) =>
               name === "ollama_pull_model" &&
-              (args as { modelName?: string }).modelName === "qwen3",
+              (args as { modelName?: string }).modelName === "qwen3:8b",
           ),
       ).toBe(true),
     );
@@ -676,6 +747,298 @@ describe("desktop workspace", () => {
     );
     expect(await screen.findByText("Download complete")).toBeTruthy();
     expect(screen.getByText("completed")).toBeTruthy();
+  });
+
+  it("offers parameter choices from the download action and pulls the selected tag", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "qwen3",
+                    description: "Reasoning model.",
+                    capabilities: ["thinking"],
+                    downloads: "25.8M",
+                    sizes: ["4b", "8b"],
+                    downloadSize: "5.2GB",
+                    variants: [
+                      { tag: "4b", downloadSize: "1GB - 2GB" },
+                      { tag: "8b", downloadSize: "5GB - 6GB" },
+                      { tag: "latest", downloadSize: "1GB - 2GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    const download = await screen.findByRole("button", {
+      name: "Download qwen3",
+    });
+    expect(screen.queryByRole("combobox", { name: /qwen3/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "4b · 2.5GB - 3GB" }),
+    ).toBeNull();
+    fireEvent.click(download);
+    const variantChoice = await screen.findByRole("button", {
+      name: "4b · 1GB - 2GB",
+    });
+    fireEvent.click(variantChoice);
+    expect(
+      screen
+        .getByRole("row", { name: /qwen3/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("1GB - 6GB");
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([name, args]) =>
+              name === "ollama_pull_model" &&
+              (args as { modelName?: string }).modelName === "qwen3:4b",
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("shows the smallest-to-largest catalog size across parameters and tags", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "range-model",
+                    description: "A model with multiple parameter sizes.",
+                    capabilities: ["chat"],
+                    downloads: "10K",
+                    sizes: ["5b", "6b"],
+                    downloadSize: "1GB - 2GB",
+                    variants: [
+                      { tag: "5b", downloadSize: "1GB - 2GB" },
+                      { tag: "5b-q4_K_M", downloadSize: "1.5GB" },
+                      { tag: "6b", downloadSize: "5GB - 6GB" },
+                      { tag: "6b-q4_K_M", downloadSize: "5.4GB" },
+                      { tag: "latest", downloadSize: "1GB - 2GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(
+      await screen.findByRole("row", { name: /range-model/ }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /range-model/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("1GB - 6GB");
+  });
+
+  it("excludes quantization tag sizes from the parameter-size summary", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "autotrust-jev",
+                    description: "Decision model family.",
+                    capabilities: ["decision"],
+                    downloads: "51K",
+                    sizes: ["9b", "35b"],
+                    downloadSize: "11GB",
+                    variants: [
+                      { tag: "9b", downloadSize: "11GB" },
+                      { tag: "9b-q2_K", downloadSize: "8GB" },
+                      { tag: "9b-q8_0", downloadSize: "17GB" },
+                      { tag: "35b", downloadSize: "26GB" },
+                      { tag: "35b-q2_K", downloadSize: "20GB" },
+                      { tag: "35b-q8_0", downloadSize: "39GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(
+      await screen.findByRole("row", { name: /autotrust-jev/ }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("row", { name: /autotrust-jev/ })
+        .querySelector(".directory-size")?.textContent,
+    ).toBe("11GB - 26GB");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Download autotrust-jev" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "9b · 11GB" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "35b · 26GB" })).toBeTruthy();
+  });
+
+  it("offers exact quantization tags and sizes after choosing a parameter size", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "tev1",
+                    description: "Decision model.",
+                    capabilities: ["reasoning"],
+                    downloads: "170K",
+                    sizes: ["0.8b", "4b"],
+                    downloadSize: "4.4GB - 4.6GB",
+                    variants: [
+                      { tag: "0.8b", downloadSize: "834MB - 1.5GB" },
+                      { tag: "0.8b-q8_0", downloadSize: "834MB" },
+                      { tag: "4b", downloadSize: "4.4GB - 4.6GB" },
+                      { tag: "4b-q4_K_M", downloadSize: "2.8GB" },
+                      { tag: "4b-q8_0", downloadSize: "4.6GB" },
+                      { tag: "4b-bf16", downloadSize: "8.7GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download tev1" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "4b · 4.4GB - 4.6GB" }),
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: /tev1:4b-q4_K_M.*2.8GB.*Recommended/,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("row", { name: /tev1/ }).querySelector(".directory-size")
+        ?.textContent,
+    ).toBe("834MB - 4.6GB");
+    expect(
+      screen.getByRole("button", { name: /tev1:4b-q8_0.*4.6GB/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /tev1:4b-bf16.*8.7GB/ }),
+    ).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_pull_model"),
+    ).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /tev1:4b-q4_K_M.*2.8GB.*Recommended/,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command, args]) =>
+              command === "ollama_pull_model" &&
+              (args as { modelName?: string }).modelName === "tev1:4b-q4_K_M",
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it("recommends the default available quantization when Q4_K_M is unavailable", async () => {
+    vi.mocked(invoke).mockImplementation((command) =>
+      Promise.resolve(
+        command === "ollama_connection"
+          ? "0.1.0"
+          : command === "ollama_catalog"
+            ? {
+                models: [
+                  {
+                    name: "sample-model",
+                    description: "A test model.",
+                    capabilities: ["chat"],
+                    downloads: "10K",
+                    sizes: ["4b"],
+                    variants: [
+                      { tag: "4b-q5_K_M", downloadSize: "3.1GB" },
+                      { tag: "4b-q8_0", downloadSize: "4.6GB" },
+                    ],
+                  },
+                ],
+                page: 1,
+                hasMore: false,
+              }
+            : [],
+      ),
+    );
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download sample-model" }),
+    );
+
+    const recommended = await screen.findByRole("button", {
+      name: /sample-model:4b-q5_K_M.*3.1GB.*Recommended/,
+    });
+    expect(recommended.classList.contains("recommended")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /sample-model:4b-q8_0.*4.6GB/ }),
+    ).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_pull_model"),
+    ).toBe(false);
   });
 
   it("shows download progress only on the model being pulled", async () => {
@@ -907,6 +1270,62 @@ describe("desktop workspace", () => {
     ).toBeTruthy();
   });
 
+  it("asks for the model size again after cancelling a selected variant", async () => {
+    let rejectPull: ((reason?: string) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "size-choice-model",
+              description: "A model with two parameter sizes.",
+              capabilities: ["chat"],
+              downloads: "10K",
+              sizes: ["1b", "5b"],
+              variants: [
+                { tag: "1b", downloadSize: "1GB" },
+                { tag: "5b", downloadSize: "5GB" },
+              ],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model")
+        return new Promise((_, reject) => {
+          rejectPull = reject;
+        });
+      if (command === "ollama_cancel_pull") {
+        rejectPull?.("Download cancelled");
+        return Promise.resolve();
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download size-choice-model" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "1b · 1GB" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Cancel download size-choice-model",
+      }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download size-choice-model" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "1b · 1GB" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5b · 5GB" })).toBeTruthy();
+  });
+
   it("renders streamed Ollama pull progress in Downloads", async () => {
     let reportProgress:
       | ((payload: {
@@ -961,7 +1380,7 @@ describe("desktop workspace", () => {
     await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
     act(() =>
       reportProgress?.({
-        model: "qwen3",
+        model: "qwen3:8b",
         status: "downloading",
         message: "pulling model layers",
         completed: 3,
