@@ -204,6 +204,16 @@ export default function WorkspaceViews({
   const autoLoadPending = useRef(false);
   const selectedChat = models.includes(chatModel) ? chatModel : "";
   const selectedApi = models.includes(apiModel) ? apiModel : "";
+  const cancelModelDownload = (model: string) => {
+    cancelDownload(model);
+    const modelName = model.split(":")[0];
+    setSelectedModelSizes((current) => {
+      if (!(modelName in current)) return current;
+      const next = { ...current };
+      delete next[modelName];
+      return next;
+    });
+  };
 
   useEffect(() => {
     loadMoreCatalogRef.current = loadMoreCatalog;
@@ -615,7 +625,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(task.model)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -637,7 +647,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(task.model)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -649,7 +659,7 @@ export default function WorkspaceViews({
                             type="button"
                             aria-label={`${t("Cancel download")} ${model.name}`}
                             title={t("Cancel download")}
-                            onClick={() => cancelDownload(task.model)}
+                            onClick={() => cancelModelDownload(task.model)}
                           >
                             <X size={15} aria-hidden="true" />
                           </button>
@@ -839,7 +849,7 @@ export default function WorkspaceViews({
                     <button
                       type="button"
                       aria-label={`${t("Cancel download")} ${task.model}`}
-                      onClick={() => cancelDownload(task.model)}
+                      onClick={() => cancelModelDownload(task.model)}
                     >
                       <X size={15} />
                       {t("Cancel download")}
@@ -860,7 +870,7 @@ export default function WorkspaceViews({
                     <button
                       type="button"
                       aria-label={`${t("Cancel download")} ${task.model}`}
-                      onClick={() => cancelDownload(task.model)}
+                      onClick={() => cancelModelDownload(task.model)}
                     >
                       <X size={15} />
                       {t("Cancel download")}

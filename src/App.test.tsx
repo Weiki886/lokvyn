@@ -1270,6 +1270,62 @@ describe("desktop workspace", () => {
     ).toBeTruthy();
   });
 
+  it("asks for the model size again after cancelling a selected variant", async () => {
+    let rejectPull: ((reason?: string) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "size-choice-model",
+              description: "A model with two parameter sizes.",
+              capabilities: ["chat"],
+              downloads: "10K",
+              sizes: ["1b", "5b"],
+              variants: [
+                { tag: "1b", downloadSize: "1GB" },
+                { tag: "5b", downloadSize: "5GB" },
+              ],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_pull_model")
+        return new Promise((_, reject) => {
+          rejectPull = reject;
+        });
+      if (command === "ollama_cancel_pull") {
+        rejectPull?.("Download cancelled");
+        return Promise.resolve();
+      }
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download size-choice-model" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "1b · 1GB" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Cancel download size-choice-model",
+      }),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Download size-choice-model" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "1b · 1GB" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "5b · 5GB" })).toBeTruthy();
+  });
+
   it("renders streamed Ollama pull progress in Downloads", async () => {
     let reportProgress:
       | ((payload: {
