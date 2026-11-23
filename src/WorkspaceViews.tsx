@@ -45,6 +45,13 @@ type Catalog = {
   loadingMore: boolean;
   loadMoreError: boolean;
 };
+type CatalogModelDetailState =
+  | { state: "loading" }
+  | {
+      state: "loaded";
+      value: Pick<CatalogModel, "variants" | "downloadSize">;
+    }
+  | { state: "error" };
 
 type DownloadTask = {
   model: string;
@@ -155,6 +162,8 @@ export default function WorkspaceViews({
   setLocale,
   appVersion,
   catalog,
+  catalogModelDetails,
+  loadCatalogModelDetails,
   catalogQuery,
   setCatalogQuery,
   catalogSort,
@@ -177,6 +186,8 @@ export default function WorkspaceViews({
   setLocale: (locale: Locale) => void;
   appVersion: string;
   catalog: Catalog;
+  catalogModelDetails: Record<string, CatalogModelDetailState>;
+  loadCatalogModelDetails: (modelName: string, retry?: boolean) => void;
   catalogQuery: string;
   setCatalogQuery: (query: string) => void;
   catalogSort: string;
@@ -200,6 +211,8 @@ export default function WorkspaceViews({
     parameterSize: string | null;
   } | null>(null);
   const catalogEndRef = useRef<HTMLDivElement>(null);
+  const catalogRowsRef = useRef<HTMLTableSectionElement>(null);
+  const loadCatalogModelDetailsRef = useRef(loadCatalogModelDetails);
   const loadMoreCatalogRef = useRef(loadMoreCatalog);
   const autoLoadPending = useRef(false);
   const selectedChat = models.includes(chatModel) ? chatModel : "";
@@ -218,6 +231,10 @@ export default function WorkspaceViews({
   useEffect(() => {
     loadMoreCatalogRef.current = loadMoreCatalog;
   }, [loadMoreCatalog]);
+
+  useEffect(() => {
+    loadCatalogModelDetailsRef.current = loadCatalogModelDetails;
+  }, [loadCatalogModelDetails]);
 
   useEffect(() => {
     if (!catalog.loadingMore) autoLoadPending.current = false;
@@ -250,6 +267,34 @@ export default function WorkspaceViews({
     catalog.state,
     view,
   ]);
+
+  useEffect(() => {
+    if (view !== "Discover" || typeof IntersectionObserver === "undefined")
+      return;
+    const modelsByName = new Map(
+      catalog.models.map((model) => [model.name, model]),
+    );
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const modelName = (entry.target as HTMLElement).dataset.catalogModel;
+          const model = modelName ? modelsByName.get(modelName) : undefined;
+          if (modelName && model && !model.cloud && !model.variants) {
+            loadCatalogModelDetailsRef.current(modelName);
+          }
+          observer.unobserve(entry.target);
+        }
+      },
+      { rootMargin: "240px 0px" },
+    );
+    catalogRowsRef.current
+      ?.querySelectorAll<HTMLElement>("[data-catalog-model]")
+      .forEach((row) => observer.observe(row));
+    return () => {
+      observer.disconnect();
+    };
+  }, [catalog.models, view]);
 
   if (view === "Discover") {
     return (
@@ -322,13 +367,26 @@ export default function WorkspaceViews({
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody ref={catalogRowsRef}>
             {catalog.state === "loaded" &&
               catalog.models.map((model) => {
                 const savedTag = selectedModelSizes[model.name] ?? "";
+                const detailState = catalogModelDetails[model.name];
+                const variants =
+                  detailState?.state === "loaded"
+                    ? detailState.value.variants
+                    : model.variants;
+                const detailedModel = {
+                  ...model,
+                  variants,
+                  downloadSize:
+                    detailState?.state === "loaded"
+                      ? detailState.value.downloadSize
+                      : model.downloadSize,
+                };
                 const selectedTag =
                   model.sizes.includes(savedTag) ||
-                  model.variants?.some((variant) => variant.tag === savedTag)
+                  variants?.some((variant) => variant.tag === savedTag)
                     ? savedTag
                     : model.sizes.length === 1
                       ? model.sizes[0]
@@ -356,9 +414,9 @@ export default function WorkspaceViews({
                           item.state,
                         ))),
                 );
-                const catalogSize = modelCatalogSize(model);
+                const catalogSize = modelCatalogSize(detailedModel);
                 const sizeOptions = model.sizes.map((size) => {
-                  const downloadSize = model.variants?.find(
+                  const downloadSize = variants?.find(
                     (variant) => variant.tag === size,
                   )?.downloadSize;
                   return {
@@ -370,7 +428,7 @@ export default function WorkspaceViews({
                   choosingModelVariant?.modelName === model.name &&
                   choosingModelVariant.parameterSize
                     ? variantsForParameter(
-                        model.variants,
+                        variants,
                         choosingModelVariant.parameterSize,
                       )
                     : [];
@@ -385,7 +443,7 @@ export default function WorkspaceViews({
                     quantizationOptions[0]?.tag)
                   : undefined;
                 return (
-                  <tr key={model.name}>
+                  <tr key={model.name} data-catalog-model={model.name}>
                     <th scope="row">
                       <div className="directory-model">
                         <div>
@@ -415,11 +473,12 @@ export default function WorkspaceViews({
                                         key={option.value}
                                         disabled={!connected}
                                         onClick={() => {
-                                          const variants = variantsForParameter(
-                                            model.variants,
-                                            option.value,
-                                          );
-                                          if (variants.length > 1) {
+                                          const selectedVariants =
+                                            variantsForParameter(
+                                              variants,
+                                              option.value,
+                                            );
+                                          if (selectedVariants.length > 1) {
                                             setChoosingModelVariant({
                                               modelName: model.name,
                                               parameterSize: option.value,
@@ -427,7 +486,8 @@ export default function WorkspaceViews({
                                             return;
                                           }
                                           const tag =
-                                            variants[0]?.tag ?? option.value;
+                                            selectedVariants[0]?.tag ??
+                                            option.value;
                                           setSelectedModelSizes((current) => ({
                                             ...current,
                                             [model.name]: tag,
@@ -591,7 +651,30 @@ export default function WorkspaceViews({
                         ))}
                       </div>
                     </td>
-                    <td className="directory-size">{catalogSize}</td>
+                    <td className="directory-size">
+                      {detailState?.state === "error" && !variants ? (
+                        <span className="catalog-detail-error">
+                          {t("Could not load model details")}{" "}
+                          <button
+                            type="button"
+                            aria-label={`${t("Retry details")} ${model.name}`}
+                            onClick={() =>
+                              loadCatalogModelDetails(model.name, true)
+                            }
+                          >
+                            {t("Retry details")}
+                          </button>
+                        </span>
+                      ) : detailState?.state === "loading" &&
+                        !variants &&
+                        !model.cloud ? (
+                        <span>{t("Loading...")}</span>
+                      ) : !variants && !model.cloud ? (
+                        "-"
+                      ) : (
+                        catalogSize
+                      )}
+                    </td>
                     <td className="directory-downloads">
                       {model.downloads ?? "-"}
                     </td>
@@ -683,7 +766,12 @@ export default function WorkspaceViews({
                               ? "Retry download"
                               : "Download model",
                           )}
-                          disabled={!connected}
+                          disabled={
+                            !connected ||
+                            (!model.cloud &&
+                              !model.variants &&
+                              detailState?.state !== "loaded")
+                          }
                           onClick={() => {
                             if (!selectedTag && model.sizes.length > 1) {
                               setChoosingModelVariant({
@@ -695,7 +783,7 @@ export default function WorkspaceViews({
                             if (
                               selectedParameterSize &&
                               variantsForParameter(
-                                model.variants,
+                                variants,
                                 selectedParameterSize,
                               ).length > 1
                             ) {

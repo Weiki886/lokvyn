@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter};
 
 static OLLAMA_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static OLLAMA_PULL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CATALOG_DETAIL_LIMITER: LazyLock<tokio::sync::Semaphore> =
+    LazyLock::new(|| tokio::sync::Semaphore::new(4));
 static OLLAMA_PULL_CONTROLS: LazyLock<Mutex<HashMap<String, Arc<PullControl>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -68,7 +70,6 @@ impl PullControl {
 
 const CATALOG_RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const CATALOG_PAGE_SIZE: u32 = 20;
-const CATALOG_DETAIL_CONCURRENCY: usize = 4;
 
 #[derive(Debug, PartialEq)]
 struct CatalogModel {
@@ -133,12 +134,16 @@ fn default_download_size(variants: &[ModelVariant]) -> Option<String> {
         .and_then(|variant| variant.download_size.clone())
 }
 
-fn parse_model_variants(html: &str, model_name: &str) -> Vec<ModelVariant> {
-    if model_name.is_empty()
-        || !model_name
+fn valid_catalog_model_name(model_name: &str) -> bool {
+    !model_name.is_empty()
+        && model_name.len() <= 120
+        && model_name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
-    {
+}
+
+fn parse_model_variants(html: &str, model_name: &str) -> Vec<ModelVariant> {
+    if !valid_catalog_model_name(model_name) {
         return Vec::new();
     }
     let document = Html::parse_document(html);
@@ -698,9 +703,35 @@ async fn ollama_catalog(
         html.extend_from_slice(&chunk);
     }
     let html = std::str::from_utf8(&html).map_err(|_| "unavailable")?;
-    let mut catalog = parse_catalog_page(html, page).map_err(str::to_owned)?;
-    enrich_catalog_download_sizes(&client, &mut catalog).await;
-    Ok(catalog)
+    parse_catalog_page(html, page).map_err(str::to_owned)
+}
+
+#[tauri::command]
+async fn ollama_catalog_model(model_name: String) -> Result<serde_json::Value, String> {
+    if !valid_catalog_model_name(&model_name) {
+        return Err("unavailable".into());
+    }
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|_| "unavailable")?;
+    let _permit = CATALOG_DETAIL_LIMITER
+        .acquire()
+        .await
+        .map_err(|_| "unavailable")?;
+    let variants = fetch_model_variants(&client, &model_name)
+        .await
+        .ok_or_else(|| "unavailable".to_owned())?;
+    Ok(serde_json::json!({
+        "variants": variants.iter().map(|variant| serde_json::json!({
+            "tag": variant.tag,
+            "downloadSize": variant.download_size,
+        })).collect::<Vec<_>>(),
+        "downloadSize": default_download_size(&variants),
+    }))
 }
 
 async fn fetch_model_variants(
@@ -730,68 +761,6 @@ async fn fetch_model_variants(
     }
     let html = std::str::from_utf8(&html).ok()?;
     Some(parse_model_variants(html, model_name))
-}
-
-async fn enrich_catalog_download_sizes(client: &reqwest::Client, catalog: &mut serde_json::Value) {
-    let Some(models) = catalog.get("models").and_then(serde_json::Value::as_array) else {
-        return;
-    };
-    let model_names = models
-        .iter()
-        .filter(|model| {
-            !model
-                .get("cloud")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        })
-        .filter_map(|model| {
-            model
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect::<Vec<_>>();
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(CATALOG_DETAIL_CONCURRENCY));
-    let mut tasks = tokio::task::JoinSet::new();
-    for model_name in model_names {
-        let client = client.clone();
-        let semaphore = semaphore.clone();
-        tasks.spawn(async move {
-            let _permit = semaphore.acquire_owned().await.ok()?;
-            let variants = fetch_model_variants(&client, &model_name).await;
-            Some((model_name, variants))
-        });
-    }
-    let mut download_sizes = HashMap::new();
-    while let Some(result) = tasks.join_next().await {
-        if let Ok(Some((name, Some(variants)))) = result {
-            download_sizes.insert(name, variants);
-        }
-    }
-    if let Some(models) = catalog
-        .get_mut("models")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for model in models {
-            let Some(name) = model.get("name").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            if let Some(variants) = download_sizes.get(name) {
-                model["variants"] = serde_json::json!(variants
-                    .iter()
-                    .map(|variant| {
-                        serde_json::json!({
-                            "tag": variant.tag,
-                            "downloadSize": variant.download_size,
-                        })
-                    })
-                    .collect::<Vec<_>>());
-                if let Some(size) = default_download_size(variants) {
-                    model["downloadSize"] = serde_json::Value::String(size);
-                }
-            }
-        }
-    }
 }
 
 fn safe_pull_error(message: &str) -> String {
@@ -1203,6 +1172,23 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn validates_catalog_model_names_before_building_library_urls() {
+        for name in ["qwen3", "gemma-3.1", "model_name.v2"] {
+            assert!(valid_catalog_model_name(name));
+        }
+        for name in [
+            "",
+            "../tags",
+            "qwen3/tags",
+            "https://example.com",
+            "has space",
+        ] {
+            assert!(!valid_catalog_model_name(name));
+        }
+        assert!(!valid_catalog_model_name(&"a".repeat(121)));
     }
 
     #[test]
@@ -1714,6 +1700,7 @@ fn main() {
             ollama_connection,
             ollama_models,
             ollama_catalog,
+            ollama_catalog_model,
             ollama_pull_model,
             ollama_cancel_pull,
             ollama_model_details,

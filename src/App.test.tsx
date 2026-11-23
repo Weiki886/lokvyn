@@ -21,6 +21,45 @@ const ollamaModel = (name: string) => ({
   size: null,
   modifiedAt: null,
 });
+type TestObserver = {
+  callback: IntersectionObserverCallback;
+  targets: Element[];
+};
+function stubIntersectionObservers() {
+  const observers: TestObserver[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      targets: Element[] = [];
+      constructor(callback: IntersectionObserverCallback) {
+        observers.push({ callback, targets: this.targets });
+      }
+      observe(target: Element) {
+        this.targets.push(target);
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    },
+  );
+  return observers;
+}
+function intersect(observers: TestObserver[], target: Element) {
+  const observer = observers.find((item) => item.targets.includes(target));
+  act(() =>
+    observer?.callback(
+      [
+        {
+          isIntersecting: true,
+          target,
+        } as unknown as IntersectionObserverEntry,
+      ],
+      {} as IntersectionObserver,
+    ),
+  );
+}
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(getVersion).mockResolvedValue("0.1.0");
@@ -37,6 +76,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -484,23 +524,8 @@ describe("desktop workspace", () => {
   });
 
   it("loads live catalog results, searches remotely, and shows installed state", async () => {
-    let intersectionCallback: IntersectionObserverCallback | undefined;
+    const observers = stubIntersectionObservers();
     let failNextPage = true;
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        constructor(callback: IntersectionObserverCallback) {
-          intersectionCallback = callback;
-        }
-
-        observe() {}
-        disconnect() {}
-        unobserve() {}
-        takeRecords() {
-          return [];
-        }
-      },
-    );
     vi.mocked(invoke).mockImplementation((command, args) =>
       Promise.resolve(
         command === "ollama_connection"
@@ -582,17 +607,7 @@ describe("desktop workspace", () => {
       ).toBe(true);
     });
     const catalogEnd = await screen.findByTestId("catalog-end");
-    act(() => {
-      intersectionCallback?.(
-        [
-          {
-            isIntersecting: true,
-            target: catalogEnd,
-          } as unknown as IntersectionObserverEntry,
-        ],
-        {} as IntersectionObserver,
-      );
-    });
+    intersect(observers, catalogEnd);
     const retryLoad = await screen.findByRole("button", {
       name: "Retry loading more",
     });
@@ -660,7 +675,205 @@ describe("desktop workspace", () => {
     ).toBeTruthy();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry catalog" }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(([command]) => command === "ollama_catalog"),
+      ).toHaveLength(2),
+    );
     expect(await screen.findByText("No matching models")).toBeTruthy();
+  });
+
+  it("shows catalog rows before visible model details finish loading", async () => {
+    const observers: {
+      callback: IntersectionObserverCallback;
+      targets: Element[];
+    }[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        targets: Element[] = [];
+        constructor(callback: IntersectionObserverCallback) {
+          observers.push({ callback, targets: this.targets });
+        }
+        observe(target: Element) {
+          this.targets.push(target);
+        }
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    let resolveDetails: ((value: unknown) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: ["visible-model", "offscreen-model"].map((name) => ({
+            name,
+            description: "A model family.",
+            capabilities: [],
+            downloads: null,
+            sizes: ["1b"],
+          })),
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_catalog_model")
+        return new Promise((resolve) => {
+          resolveDetails = resolve;
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    const row = await screen.findByRole("row", { name: /visible-model/ });
+    expect(screen.queryByText("Loading Ollama models...")).toBeNull();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([name]) => name === "ollama_catalog_model"),
+    ).toHaveLength(0);
+    const observer = observers.find(({ targets }) => targets.includes(row));
+    expect(observer).toBeTruthy();
+    act(() =>
+      observer?.callback(
+        [
+          {
+            isIntersecting: true,
+            target: row,
+          } as unknown as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      ),
+    );
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("ollama_catalog_model", {
+        modelName: "visible-model",
+      }),
+    );
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([name]) => name === "ollama_catalog_model"),
+    ).toHaveLength(1);
+    expect(screen.getByText("visible-model")).toBeTruthy();
+    await act(async () =>
+      resolveDetails?.({
+        variants: [{ tag: "1b", downloadSize: "700MB" }],
+        downloadSize: "700MB",
+      }),
+    );
+    expect(within(row).getByText("700MB")).toBeTruthy();
+  });
+
+  it("reuses catalog and loaded size details when returning to Discover", async () => {
+    const observers = stubIntersectionObservers();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "cached-model",
+              description: "Cached family.",
+              capabilities: [],
+              downloads: null,
+              sizes: ["1b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_catalog_model")
+        return Promise.resolve({
+          variants: [{ tag: "1b", downloadSize: "700MB" }],
+          downloadSize: "700MB",
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    const row = await screen.findByRole("row", { name: /cached-model/ });
+    intersect(observers, row);
+    expect(await screen.findByText("700MB")).toBeTruthy();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Navigate to Chat" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(screen.getByText("cached-model")).toBeTruthy();
+    expect(screen.getByText("700MB")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([name]) => name === "ollama_catalog"),
+    ).toHaveLength(1);
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([name]) => name === "ollama_catalog_model"),
+    ).toHaveLength(1);
+  });
+
+  it("retries failed model details before starting a download", async () => {
+    const observers = stubIntersectionObservers();
+    let fail = true;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "retry-model",
+              description: "Retry family.",
+              capabilities: [],
+              downloads: null,
+              sizes: ["1b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      if (command === "ollama_catalog_model")
+        return fail
+          ? Promise.reject("unavailable")
+          : Promise.resolve({
+              variants: [{ tag: "1b", downloadSize: "700MB" }],
+              downloadSize: "700MB",
+            });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    const row = await screen.findByRole("row", { name: /retry-model/ });
+    intersect(observers, row);
+    const retry = await screen.findByRole("button", {
+      name: "Retry details retry-model",
+    });
+    expect(screen.getByText("retry-model")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([name]) => name === "ollama_pull_model"),
+    ).toBe(false);
+    fail = false;
+    fireEvent.click(retry);
+    expect(await screen.findByText("700MB")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([name]) => name === "ollama_pull_model"),
+    ).toBe(false);
   });
 
   it("marks cloud catalog models as unavailable for local download", async () => {
@@ -716,6 +929,7 @@ describe("desktop workspace", () => {
                     capabilities: ["thinking"],
                     downloads: "25.8M",
                     sizes: ["8b"],
+                    variants: [{ tag: "8b", downloadSize: null }],
                   },
                 ],
                 page: 1,
@@ -1053,6 +1267,7 @@ describe("desktop workspace", () => {
               capabilities: ["thinking"],
               downloads: "25.8M",
               sizes: ["8b"],
+              variants: [{ tag: "8b", downloadSize: null }],
             },
             {
               name: "llama3.2",
@@ -1060,6 +1275,7 @@ describe("desktop workspace", () => {
               capabilities: ["chat"],
               downloads: "12M",
               sizes: ["3b"],
+              variants: [{ tag: "3b", downloadSize: null }],
             },
           ],
           page: 1,
@@ -1115,6 +1331,7 @@ describe("desktop workspace", () => {
               capabilities: ["thinking"],
               downloads: "25.8M",
               sizes: ["8b"],
+              variants: [{ tag: "8b", downloadSize: null }],
             },
           ],
           page: 1,
@@ -1151,6 +1368,7 @@ describe("desktop workspace", () => {
               capabilities: ["thinking"],
               downloads: "25.8M",
               sizes: ["8b"],
+              variants: [{ tag: "8b", downloadSize: null }],
             },
           ],
           page: 1,
@@ -1188,6 +1406,7 @@ describe("desktop workspace", () => {
               capabilities: ["thinking"],
               downloads: "25.8M",
               sizes: ["8b"],
+              variants: [{ tag: "8b", downloadSize: null }],
             },
           ],
           page: 1,
@@ -1239,6 +1458,7 @@ describe("desktop workspace", () => {
               capabilities: ["thinking"],
               downloads: "25.8M",
               sizes: ["8b"],
+              variants: [{ tag: "8b", downloadSize: null }],
             },
           ],
           page: 1,
@@ -1354,6 +1574,7 @@ describe("desktop workspace", () => {
                     capabilities: ["thinking"],
                     downloads: "25.8M",
                     sizes: ["8b"],
+                    variants: [{ tag: "8b", downloadSize: null }],
                   },
                 ],
                 page: 1,
@@ -1554,6 +1775,7 @@ describe("language and application version settings", () => {
                     capabilities: ["thinking"],
                     downloads: "25.8M",
                     sizes: ["8b"],
+                    variants: [{ tag: "8b", downloadSize: null }],
                   },
                   {
                     name: "nomic-embed-text",
@@ -1561,6 +1783,7 @@ describe("language and application version settings", () => {
                     capabilities: ["embedding"],
                     downloads: "2.1M",
                     sizes: ["latest"],
+                    variants: [{ tag: "latest", downloadSize: null }],
                   },
                 ].filter((model) =>
                   (args as { capability?: string }).capability === "embedding"
@@ -1577,11 +1800,11 @@ describe("language and application version settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "导航到发现模型" }));
     expect(screen.getByRole("table", { name: "模型目录" })).toBeTruthy();
     expect(await screen.findByText("qwen3")).toBeTruthy();
-    expect(screen.getByText("nomic-embed-text")).toBeTruthy();
+    expect(await screen.findByText("nomic-embed-text")).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "能力类型" }));
     fireEvent.click(screen.getByRole("option", { name: "向量嵌入" }));
     await waitFor(() => expect(screen.queryByText("qwen3")).toBeNull());
-    expect(screen.getByText("nomic-embed-text")).toBeTruthy();
+    expect(await screen.findByText("nomic-embed-text")).toBeTruthy();
     expect(screen.getByText("用于搜索与检索的文本向量。")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "下载 nomic-embed-text" }),
