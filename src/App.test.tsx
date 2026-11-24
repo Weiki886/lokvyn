@@ -1946,7 +1946,8 @@ describe("desktop workspace", () => {
       "Loading",
     );
     await screen.findByText("Connected");
-    rejectModels(new Error("unavailable"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("ollama_models"));
+    await act(async () => rejectModels(new Error("unavailable")));
     await waitFor(() => {
       expect(
         within(service).getByLabelText("Installed models").textContent,
