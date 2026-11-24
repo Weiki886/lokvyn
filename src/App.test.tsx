@@ -11,11 +11,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import { readCatalogPages, readModelDetails } from "./catalogCache";
 import App from "./App";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("./catalogCache", () => ({
+  readCatalogPages: vi.fn().mockResolvedValue([]),
+  writeCatalogPage: vi.fn().mockResolvedValue(undefined),
+  readModelDetails: vi.fn().mockResolvedValue(null),
+  writeModelDetails: vi.fn().mockResolvedValue(undefined),
+}));
 const ollamaModel = (name: string) => ({
   name,
   size: null,
@@ -767,6 +774,287 @@ describe("desktop workspace", () => {
       }),
     );
     expect(within(row).getByText("700MB")).toBeTruthy();
+  });
+
+  it("fetches the catalog when cached pages no longer contain page one", async () => {
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      { page: 2, models: [], hasMore: false, savedAt: Date.now() },
+    ]);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "live-model",
+              description: "Live",
+              capabilities: [],
+              downloads: null,
+              sizes: [],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("live-model")).toBeTruthy();
+  });
+
+  it("renders persisted catalog rows before the refresh finishes", async () => {
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [
+          {
+            name: "persisted-model",
+            description: "Saved catalog entry.",
+            capabilities: [],
+            downloads: null,
+            sizes: ["1b"],
+          },
+        ],
+        hasMore: false,
+        savedAt: Date.now() - 10 * 60 * 1000,
+      },
+    ]);
+    let resolveCatalog: ((result: unknown) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return new Promise((resolve) => {
+          resolveCatalog = resolve;
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("persisted-model")).toBeTruthy();
+    expect(screen.queryByText("Loading Ollama models...")).toBeNull();
+    expect(readCatalogPages).toHaveBeenCalled();
+    await act(async () =>
+      resolveCatalog?.({ models: [], page: 1, hasMore: false }),
+    );
+  });
+
+  it("waits for a stale first-page refresh before loading another cached page", async () => {
+    const observers = stubIntersectionObservers();
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [
+          {
+            name: "stale-page",
+            description: "Cached",
+            capabilities: [],
+            downloads: null,
+            sizes: [],
+          },
+        ],
+        hasMore: true,
+        savedAt: Date.now() - 10 * 60 * 1000,
+      },
+    ]);
+    let resolveCatalog: ((result: unknown) => void) | undefined;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return new Promise((resolve) => {
+          resolveCatalog = resolve;
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("stale-page")).toBeTruthy();
+    intersect(observers, screen.getByTestId("catalog-end"));
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "ollama_catalog"),
+    ).toHaveLength(1);
+    await act(async () =>
+      resolveCatalog?.({ models: [], page: 1, hasMore: false }),
+    );
+  });
+
+  it("keeps persisted catalog rows when an offline refresh fails", async () => {
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [
+          {
+            name: "offline-cached-model",
+            description: "Available from local cache.",
+            capabilities: [],
+            downloads: null,
+            sizes: ["1b"],
+          },
+        ],
+        hasMore: false,
+        savedAt: Date.now() - 60 * 60 * 1000,
+      },
+    ]);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog") return Promise.reject("offline");
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("offline-cached-model")).toBeTruthy();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("ollama_catalog", expect.anything()),
+    );
+    expect(screen.getByText("offline-cached-model")).toBeTruthy();
+    expect(screen.queryByText("Could not load the Ollama catalog")).toBeNull();
+  });
+
+  it("shows the cache timestamp and allows an explicit catalog refresh", async () => {
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [
+          {
+            name: "fresh-cached-model",
+            description: "Still fresh.",
+            capabilities: [],
+            downloads: null,
+            sizes: ["1b"],
+          },
+        ],
+        hasMore: false,
+        savedAt: Date.now(),
+      },
+    ]);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({ models: [], page: 1, hasMore: false });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("fresh-cached-model")).toBeTruthy();
+    expect(screen.getByText(/Updated/)).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "ollama_catalog"),
+    ).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh catalog" }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(([command]) => command === "ollama_catalog"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("keeps cached rows and does not loop after a failed manual refresh", async () => {
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [
+          {
+            name: "refresh-fallback-model",
+            description: "Cached while offline.",
+            capabilities: [],
+            downloads: null,
+            sizes: ["1b"],
+          },
+        ],
+        hasMore: false,
+        savedAt: Date.now(),
+      },
+    ]);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog") return Promise.reject("offline");
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    expect(await screen.findByText("refresh-fallback-model")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(([command]) => command === "ollama_catalog"),
+      ).toHaveLength(0),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh catalog" }));
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(([command]) => command === "ollama_catalog"),
+      ).toHaveLength(1),
+    );
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "ollama_catalog"),
+    ).toHaveLength(1);
+    expect(screen.getByText("refresh-fallback-model")).toBeTruthy();
+  });
+
+  it("uses persisted model details without waiting for Ollama tags", async () => {
+    const observers = stubIntersectionObservers();
+    vi.mocked(readModelDetails).mockResolvedValueOnce({
+      value: {
+        variants: [{ tag: "1b", downloadSize: "700MB" }],
+        downloadSize: "700MB",
+      },
+      savedAt: Date.now(),
+    });
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "ollama_connection") return Promise.resolve("0.1.0");
+      if (command === "ollama_catalog")
+        return Promise.resolve({
+          models: [
+            {
+              name: "persisted-details",
+              description: "Cached.",
+              capabilities: [],
+              downloads: null,
+              sizes: ["1b"],
+            },
+          ],
+          page: 1,
+          hasMore: false,
+        });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+    const row = await screen.findByRole("row", { name: /persisted-details/ });
+    intersect(observers, row);
+    expect(await screen.findByText("700MB")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "ollama_catalog_model"),
+    ).toBe(false);
   });
 
   it("reuses catalog and loaded size details when returning to Discover", async () => {

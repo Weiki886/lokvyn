@@ -11,6 +11,7 @@ import {
   Pause,
   Play,
   Search,
+  RefreshCw,
   Server,
   X,
 } from "lucide-react";
@@ -162,6 +163,8 @@ export default function WorkspaceViews({
   setLocale,
   appVersion,
   catalog,
+  catalogUpdatedAt,
+  catalogRefreshError,
   catalogModelDetails,
   loadCatalogModelDetails,
   catalogQuery,
@@ -186,6 +189,8 @@ export default function WorkspaceViews({
   setLocale: (locale: Locale) => void;
   appVersion: string;
   catalog: Catalog;
+  catalogUpdatedAt: number | null;
+  catalogRefreshError: boolean;
   catalogModelDetails: Record<string, CatalogModelDetailState>;
   loadCatalogModelDetails: (modelName: string, retry?: boolean) => void;
   catalogQuery: string;
@@ -306,6 +311,25 @@ export default function WorkspaceViews({
               ? `${catalog.models.length}${catalog.hasMore ? "+" : ""} ${t("models shown")}`
               : ""}
           </span>
+          {catalogUpdatedAt !== null && (
+            <span className="catalog-last-updated">
+              {t("Updated")}{" "}
+              {new Intl.DateTimeFormat(locale, {
+                dateStyle: "short",
+                timeStyle: "short",
+              }).format(catalogUpdatedAt)}
+            </span>
+          )}
+          <button
+            className="icon-button catalog-refresh"
+            type="button"
+            aria-label={t("Refresh catalog")}
+            title={t("Refresh catalog")}
+            disabled={catalog.state === "loading"}
+            onClick={retryCatalog}
+          >
+            <RefreshCw size={15} aria-hidden="true" />
+          </button>
           <span className="preview-label">{t("Live catalog")}</span>
         </div>
         <div className="filter-bar">
@@ -349,6 +373,13 @@ export default function WorkspaceViews({
         <p className="quiet-note">
           {t("Catalog data is provided by the Ollama library.")}
         </p>
+        {catalogRefreshError && (
+          <p className="quiet-note" role="status">
+            {t(
+              "Could not refresh. Showing cached models. Try Refresh catalog again.",
+            )}
+          </p>
+        )}
         <table className="model-directory" aria-label={t("Model directory")}>
           <thead>
             <tr>
