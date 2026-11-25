@@ -843,6 +843,45 @@ describe("desktop workspace", () => {
     );
   });
 
+  it("deduplicates overlapping cached catalog pages by model name", async () => {
+    const savedAt = Date.now();
+    const model = (name: string) => ({
+      name,
+      description: `${name} description`,
+      capabilities: [],
+      downloads: null,
+      sizes: [],
+    });
+    vi.mocked(readCatalogPages).mockResolvedValueOnce([
+      {
+        page: 1,
+        models: [model("shared-model"), model("first-page-model")],
+        hasMore: true,
+        savedAt,
+      },
+      {
+        page: 2,
+        models: [model("shared-model"), model("second-page-model")],
+        hasMore: false,
+        savedAt,
+      },
+    ]);
+
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to Discover" }),
+    );
+
+    expect(await screen.findByText("second-page-model")).toBeTruthy();
+    expect(screen.getAllByText("shared-model", { exact: true })).toHaveLength(
+      1,
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      "ollama_catalog",
+      expect.anything(),
+    );
+  });
+
   it("waits for a stale first-page refresh before loading another cached page", async () => {
     const observers = stubIntersectionObservers();
     vi.mocked(readCatalogPages).mockResolvedValueOnce([

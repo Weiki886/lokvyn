@@ -70,6 +70,16 @@ type CatalogModelDetailState =
   | { state: "error" };
 type CachedCatalog = { value: Catalog; savedAt: number };
 type CachedCatalogDetails = { value: CatalogModelDetails; savedAt: number };
+
+function deduplicateCatalogModels(models: CatalogModel[]) {
+  const seenNames = new Set<string>();
+  return models.filter((model) => {
+    if (seenNames.has(model.name)) return false;
+    seenNames.add(model.name);
+    return true;
+  });
+}
+
 type DownloadTask = {
   model: string;
   state: "queued" | "downloading" | "paused" | "completed" | "error";
@@ -318,7 +328,9 @@ export default function App() {
                   contiguousPages.push(page);
                   if (!page.hasMore) break;
                 }
-                const models = contiguousPages.flatMap((page) => page.models);
+                const models = deduplicateCatalogModels(
+                  contiguousPages.flatMap((page) => page.models),
+                );
                 const latest = contiguousPages[contiguousPages.length - 1];
                 if (!latest) return;
                 const value: Catalog = {
@@ -553,13 +565,10 @@ export default function App() {
       setCatalog((current) => {
         const next: Catalog = {
           ...current,
-          models: [
+          models: deduplicateCatalogModels([
             ...current.models,
-            ...result.models.filter(
-              (model) =>
-                !current.models.some((loaded) => loaded.name === model.name),
-            ),
-          ],
+            ...result.models,
+          ]),
           page: result.page,
           hasMore: result.hasMore,
           loadingMore: false,
