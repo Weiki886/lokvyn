@@ -147,6 +147,10 @@ const chinese: Record<string, string> = {
   "Could not load the Ollama catalog": "无法加载 Ollama 模型目录",
   "Check your internet connection and retry.": "请检查网络连接后重试。",
   "Retry catalog": "重试加载目录",
+  "Refresh catalog": "刷新模型目录",
+  Updated: "更新于",
+  "Could not refresh. Showing cached models. Try Refresh catalog again.":
+    "刷新失败，正在显示本地缓存。可点击刷新模型目录重试。",
   "Loading Ollama models...": "正在加载 Ollama 模型...",
   "Try another model name or filter.": "试试其他模型名称或筛选条件。",
   "Load more models": "加载更多模型",

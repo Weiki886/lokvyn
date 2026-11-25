@@ -863,6 +863,17 @@ h1 {
 .directory-heading .preview-label {
   margin-left: auto;
 }
+.catalog-last-updated {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+.catalog-refresh {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+}
 .filter-bar {
   display: flex;
   gap: 8px;
