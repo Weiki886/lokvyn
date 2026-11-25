@@ -24,6 +24,12 @@ import {
   X,
 } from "lucide-react";
 import WorkspaceViews, { type CatalogModel, type View } from "./WorkspaceViews";
+import {
+  readCatalogPages,
+  readModelDetails,
+  writeCatalogPage,
+  writeModelDetails,
+} from "./catalogCache";
 import { TextInput } from "./FormControls";
 import { readLocale, saveLocale, translate, type Locale } from "./i18n";
 
@@ -57,6 +63,23 @@ type Catalog = {
   loadingMore: boolean;
   loadMoreError: boolean;
 };
+type CatalogModelDetails = Pick<CatalogModel, "variants" | "downloadSize">;
+type CatalogModelDetailState =
+  | { state: "loading" }
+  | { state: "loaded"; value: CatalogModelDetails }
+  | { state: "error" };
+type CachedCatalog = { value: Catalog; savedAt: number };
+type CachedCatalogDetails = { value: CatalogModelDetails; savedAt: number };
+
+function deduplicateCatalogModels(models: CatalogModel[]) {
+  const seenNames = new Set<string>();
+  return models.filter((model) => {
+    if (seenNames.has(model.name)) return false;
+    seenNames.add(model.name);
+    return true;
+  });
+}
+
 type DownloadTask = {
   model: string;
   state: "queued" | "downloading" | "paused" | "completed" | "error";
@@ -149,8 +172,19 @@ export default function App() {
     loadingMore: false,
     loadMoreError: false,
   });
+  const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<number | null>(null);
+  const [catalogRefreshError, setCatalogRefreshError] = useState<string | null>(
+    null,
+  );
+  const [catalogModelDetails, setCatalogModelDetails] = useState<
+    Record<string, CatalogModelDetailState>
+  >({});
   const [downloads, setDownloads] = useState<DownloadTask[]>([]);
   const catalogRequestId = useRef(0);
+  const forceCatalogRefresh = useRef(false);
+  const catalogCache = useRef(new Map<string, CachedCatalog>());
+  const catalogDetailsCache = useRef(new Map<string, CachedCatalogDetails>());
+  const catalogDetailRequests = useRef(new Map<string, Promise<void>>());
   const downloadActions = useRef(new Map<string, "pause" | "cancel">());
 
   useEffect(() => {
@@ -242,48 +276,223 @@ export default function App() {
     if (view !== "Discover") return;
     let active = true;
     const requestId = ++catalogRequestId.current;
-    const timer = window.setTimeout(() => {
-      setCatalog((current) => ({
-        ...current,
+    const key = JSON.stringify([
+      catalogQuery.trim(),
+      catalogSort,
+      catalogCapability,
+    ]);
+    const forceRefresh = forceCatalogRefresh.current;
+    forceCatalogRefresh.current = false;
+    const cached = catalogCache.current.get(key);
+    if (cached) {
+      setCatalogUpdatedAt(cached.savedAt);
+      setCatalog({
+        ...cached.value,
+        state: "loaded",
+        loadingMore:
+          forceRefresh || Date.now() - cached.savedAt >= 5 * 60 * 1000,
+        loadMoreError: false,
+      });
+    } else {
+      setCatalogUpdatedAt(null);
+      setCatalog({
         state: "loading",
         models: [],
         page: 0,
         hasMore: false,
         loadingMore: false,
         loadMoreError: false,
-      }));
-      invoke<{
-        models: CatalogModel[];
-        page: number;
-        hasMore: boolean;
-      }>("ollama_catalog", {
-        query: catalogQuery,
-        page: 1,
-        sort: catalogSort,
-        capability: catalogCapability,
-      }).then(
-        (result) => {
-          if (active && catalogRequestId.current === requestId)
-            setCatalog({
+      });
+    }
+    if (
+      cached &&
+      Date.now() - cached.savedAt < 5 * 60 * 1000 &&
+      !forceRefresh
+    ) {
+      return () => {
+        active = false;
+      };
+    }
+    const timer = window.setTimeout(
+      () => {
+        void (async () => {
+          let restored = cached;
+          if (!restored) {
+            try {
+              const pages = await readCatalogPages(key);
+              if (!active || catalogRequestId.current !== requestId) return;
+              if (pages[0]?.page === 1) {
+                const contiguousPages: typeof pages = [];
+                for (const page of pages) {
+                  if (page.page !== contiguousPages.length + 1) break;
+                  contiguousPages.push(page);
+                  if (!page.hasMore) break;
+                }
+                const models = deduplicateCatalogModels(
+                  contiguousPages.flatMap((page) => page.models),
+                );
+                const latest = contiguousPages[contiguousPages.length - 1];
+                if (!latest) return;
+                const value: Catalog = {
+                  state: "loaded",
+                  models,
+                  page: latest.page,
+                  hasMore: latest.hasMore,
+                  loadingMore:
+                    forceRefresh ||
+                    Date.now() - contiguousPages[0].savedAt >= 5 * 60 * 1000,
+                  loadMoreError: false,
+                };
+                restored = {
+                  value,
+                  savedAt: contiguousPages[0].savedAt,
+                };
+                catalogCache.current.set(key, restored);
+                if (catalogCache.current.size > 12) {
+                  const oldestKey = catalogCache.current.keys().next().value;
+                  if (oldestKey) catalogCache.current.delete(oldestKey);
+                }
+                setCatalogUpdatedAt(restored.savedAt);
+                setCatalog(value);
+              }
+            } catch {
+              // IndexedDB is optional; continue with the live catalog request.
+            }
+          }
+          if (
+            restored &&
+            Date.now() - restored.savedAt < 5 * 60 * 1000 &&
+            !forceRefresh
+          )
+            return;
+          try {
+            const result = await invoke<{
+              models: CatalogModel[];
+              page: number;
+              hasMore: boolean;
+            }>("ollama_catalog", {
+              query: catalogQuery,
+              page: 1,
+              sort: catalogSort,
+              capability: catalogCapability,
+            });
+            if (!active || catalogRequestId.current !== requestId) return;
+            const next: Catalog = {
               state: "loaded",
               models: result.models,
               page: result.page,
               hasMore: result.hasMore,
               loadingMore: false,
               loadMoreError: false,
+            };
+            const savedAt = Date.now();
+            catalogCache.current.set(key, { value: next, savedAt });
+            setCatalogUpdatedAt(savedAt);
+            if (catalogCache.current.size > 12) {
+              const oldestKey = catalogCache.current.keys().next().value;
+              if (oldestKey) catalogCache.current.delete(oldestKey);
+            }
+            setCatalog(next);
+            setCatalogRefreshError(null);
+            void writeCatalogPage(key, {
+              page: result.page,
+              models: result.models,
+              hasMore: result.hasMore,
+              savedAt,
             });
-        },
-        () => {
-          if (active && catalogRequestId.current === requestId)
-            setCatalog((current) => ({ ...current, state: "error" }));
-        },
-      );
-    }, 250);
+          } catch {
+            if (active && catalogRequestId.current === requestId) {
+              setCatalog((current) =>
+                restored
+                  ? { ...current, state: "loaded", loadingMore: false }
+                  : { ...current, state: "error" },
+              );
+              setCatalogRefreshError(restored ? key : null);
+            }
+          }
+        })();
+      },
+      catalogQuery.trim() ? 250 : 0,
+    );
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
   }, [view, catalogQuery, catalogSort, catalogCapability, catalogAttempt]);
+
+  async function loadCatalogModelDetails(modelName: string, retry = false) {
+    let cached = catalogDetailsCache.current.get(modelName);
+    if (!retry && cached && Date.now() - cached.savedAt < 30 * 60 * 1000) {
+      const value = cached.value;
+      setCatalogModelDetails((current) => ({
+        ...current,
+        [modelName]: { state: "loaded", value },
+      }));
+      return;
+    }
+    const pending = catalogDetailRequests.current.get(modelName);
+    if (pending) return pending;
+    setCatalogModelDetails((current) => ({
+      ...current,
+      [modelName]: cached
+        ? { state: "loaded", value: cached.value }
+        : { state: "loading" },
+    }));
+    const request = (async () => {
+      if (!cached && !retry) {
+        try {
+          const persisted = await readModelDetails(modelName);
+          if (persisted) {
+            cached = persisted;
+            catalogDetailsCache.current.set(modelName, persisted);
+            setCatalogModelDetails((current) => ({
+              ...current,
+              [modelName]: { state: "loaded", value: persisted.value },
+            }));
+            if (Date.now() - persisted.savedAt < 30 * 60 * 1000) return;
+          }
+        } catch {
+          // IndexedDB is optional; continue with the live tags request.
+        }
+      }
+      if (cached && Date.now() - cached.savedAt < 30 * 60 * 1000 && !retry)
+        return;
+      try {
+        const value = await invoke<CatalogModelDetails>(
+          "ollama_catalog_model",
+          {
+            modelName,
+          },
+        );
+        const savedAt = Date.now();
+        catalogDetailsCache.current.set(modelName, { value, savedAt });
+        void writeModelDetails(modelName, value);
+        if (catalogDetailsCache.current.size > 100) {
+          const oldestModel = catalogDetailsCache.current.keys().next().value;
+          if (oldestModel) catalogDetailsCache.current.delete(oldestModel);
+        }
+        setCatalogModelDetails((current) => ({
+          ...current,
+          [modelName]: { state: "loaded", value },
+        }));
+      } catch {
+        setCatalogModelDetails((current) => ({
+          ...current,
+          [modelName]: cached
+            ? { state: "loaded", value: cached.value }
+            : { state: "error" },
+        }));
+      }
+    })().finally(() => catalogDetailRequests.current.delete(modelName));
+    catalogDetailRequests.current.set(modelName, request);
+    return request;
+  }
+
+  function retryCatalog() {
+    setCatalogRefreshError(null);
+    forceCatalogRefresh.current = true;
+    setCatalogAttempt((attempt) => attempt + 1);
+  }
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -353,19 +562,45 @@ export default function App() {
         capability: catalogCapability,
       });
       if (requestId !== catalogRequestId.current) return;
-      setCatalog((current) => ({
-        ...current,
-        models: [
-          ...current.models,
-          ...result.models.filter(
-            (model) =>
-              !current.models.some((loaded) => loaded.name === model.name),
-          ),
-        ],
-        page: result.page,
-        hasMore: result.hasMore,
-        loadingMore: false,
-      }));
+      setCatalog((current) => {
+        const next: Catalog = {
+          ...current,
+          models: deduplicateCatalogModels([
+            ...current.models,
+            ...result.models,
+          ]),
+          page: result.page,
+          hasMore: result.hasMore,
+          loadingMore: false,
+        };
+        const savedAt =
+          catalogCache.current.get(
+            JSON.stringify([
+              catalogQuery.trim(),
+              catalogSort,
+              catalogCapability,
+            ]),
+          )?.savedAt ?? Date.now();
+        catalogCache.current.set(
+          JSON.stringify([catalogQuery.trim(), catalogSort, catalogCapability]),
+          { value: next, savedAt },
+        );
+        setCatalogUpdatedAt(savedAt);
+        if (catalogCache.current.size > 12) {
+          const oldestKey = catalogCache.current.keys().next().value;
+          if (oldestKey) catalogCache.current.delete(oldestKey);
+        }
+        void writeCatalogPage(
+          JSON.stringify([catalogQuery.trim(), catalogSort, catalogCapability]),
+          {
+            page: result.page,
+            models: result.models,
+            hasMore: result.hasMore,
+            savedAt,
+          },
+        );
+        return next;
+      });
     } catch {
       if (requestId !== catalogRequestId.current) return;
       setCatalog((current) => ({
@@ -925,13 +1160,24 @@ export default function App() {
                 setLocale={setLocale}
                 appVersion={appVersion}
                 catalog={catalog}
+                catalogUpdatedAt={catalogUpdatedAt}
+                catalogRefreshError={
+                  catalogRefreshError ===
+                  JSON.stringify([
+                    catalogQuery.trim(),
+                    catalogSort,
+                    catalogCapability,
+                  ])
+                }
+                catalogModelDetails={catalogModelDetails}
+                loadCatalogModelDetails={loadCatalogModelDetails}
                 catalogQuery={catalogQuery}
                 setCatalogQuery={setCatalogQuery}
                 catalogSort={catalogSort}
                 setCatalogSort={setCatalogSort}
                 catalogCapability={catalogCapability}
                 setCatalogCapability={setCatalogCapability}
-                retryCatalog={() => setCatalogAttempt((attempt) => attempt + 1)}
+                retryCatalog={retryCatalog}
                 loadMoreCatalog={loadMoreCatalog}
                 downloads={downloads}
                 startDownload={downloadModel}

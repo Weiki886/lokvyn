@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter};
 
 static OLLAMA_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static OLLAMA_PULL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CATALOG_DETAIL_LIMITER: LazyLock<tokio::sync::Semaphore> =
+    LazyLock::new(|| tokio::sync::Semaphore::new(4));
 static OLLAMA_PULL_CONTROLS: LazyLock<Mutex<HashMap<String, Arc<PullControl>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -77,6 +79,7 @@ struct CatalogModel {
     cloud: bool,
     downloads: Option<String>,
     sizes: Vec<String>,
+    download_size: Option<String>,
 }
 
 fn selector(value: &str) -> Result<Selector, &'static str> {
@@ -90,6 +93,107 @@ fn element_text(element: scraper::ElementRef<'_>) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn valid_download_size(value: &str) -> bool {
+    let value = value.trim();
+    if let Some((minimum, maximum)) = [" - ", " – ", " — "]
+        .iter()
+        .find_map(|separator| value.split_once(separator))
+    {
+        return valid_single_download_size(minimum) && valid_single_download_size(maximum);
+    }
+    valid_single_download_size(value)
+}
+
+fn valid_single_download_size(value: &str) -> bool {
+    let Some(number) = ["TB", "GB", "MB", "KB", "B"]
+        .iter()
+        .find_map(|unit| value.trim().strip_suffix(unit))
+    else {
+        return false;
+    };
+    !number.is_empty()
+        && number.chars().filter(|character| *character == '.').count() <= 1
+        && number
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.')
+        && number.chars().any(|character| character.is_ascii_digit())
+}
+
+#[derive(Debug, PartialEq)]
+struct ModelVariant {
+    tag: String,
+    download_size: Option<String>,
+}
+
+fn default_download_size(variants: &[ModelVariant]) -> Option<String> {
+    variants
+        .iter()
+        .find(|variant| variant.tag == "latest")
+        .and_then(|variant| variant.download_size.clone())
+}
+
+fn valid_catalog_model_name(model_name: &str) -> bool {
+    !model_name.is_empty()
+        && model_name.len() <= 120
+        && model_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+}
+
+fn parse_model_variants(html: &str, model_name: &str) -> Vec<ModelVariant> {
+    if !valid_catalog_model_name(model_name) {
+        return Vec::new();
+    }
+    let document = Html::parse_document(html);
+    let group_selector = match Selector::parse("div.group.px-4.py-3") {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let tag_selector = match Selector::parse(&format!("a[href^=\"/library/{model_name}:\"]")) {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let size_selector = match Selector::parse("p.col-span-2") {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let href_prefix = format!("/library/{model_name}:");
+    let mut variants = Vec::new();
+    for group in document.select(&group_selector) {
+        let Some(tag) = group
+            .select(&tag_selector)
+            .next()
+            .and_then(|link| link.value().attr("href"))
+            .and_then(|href| href.strip_prefix(&href_prefix))
+            .filter(|tag| {
+                !tag.is_empty()
+                    && tag.len() <= 128
+                    && tag.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "._-".contains(character)
+                    })
+            })
+        else {
+            continue;
+        };
+        if variants
+            .iter()
+            .any(|variant: &ModelVariant| variant.tag == tag)
+        {
+            continue;
+        }
+        let download_size = group
+            .select(&size_selector)
+            .next()
+            .map(element_text)
+            .filter(|value| valid_download_size(value));
+        variants.push(ModelVariant {
+            tag: tag.to_owned(),
+            download_size,
+        });
+    }
+    variants
 }
 
 fn catalog_query_params(
@@ -196,6 +300,7 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 cloud,
                 downloads,
                 sizes,
+                download_size: None,
             })
         })
         .map(|model| {
@@ -206,6 +311,8 @@ fn parse_catalog_page(html: &str, page: u32) -> Result<serde_json::Value, &'stat
                 "cloud": model.cloud,
                 "downloads": model.downloads,
                 "sizes": model.sizes,
+                "downloadSize": model.download_size,
+                "variants": [],
             })
         })
         .collect::<Vec<_>>();
@@ -599,6 +706,63 @@ async fn ollama_catalog(
     parse_catalog_page(html, page).map_err(str::to_owned)
 }
 
+#[tauri::command]
+async fn ollama_catalog_model(model_name: String) -> Result<serde_json::Value, String> {
+    if !valid_catalog_model_name(&model_name) {
+        return Err("unavailable".into());
+    }
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|_| "unavailable")?;
+    let _permit = CATALOG_DETAIL_LIMITER
+        .acquire()
+        .await
+        .map_err(|_| "unavailable")?;
+    let variants = fetch_model_variants(&client, &model_name)
+        .await
+        .ok_or_else(|| "unavailable".to_owned())?;
+    Ok(serde_json::json!({
+        "variants": variants.iter().map(|variant| serde_json::json!({
+            "tag": variant.tag,
+            "downloadSize": variant.download_size,
+        })).collect::<Vec<_>>(),
+        "downloadSize": default_download_size(&variants),
+    }))
+}
+
+async fn fetch_model_variants(
+    client: &reqwest::Client,
+    model_name: &str,
+) -> Option<Vec<ModelVariant>> {
+    let url = format!("https://ollama.com/library/{model_name}/tags");
+    let mut response = client
+        .get(url)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > CATALOG_RESPONSE_LIMIT as u64)
+    {
+        return None;
+    }
+    let mut html = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > CATALOG_RESPONSE_LIMIT.saturating_sub(html.len()) {
+            return None;
+        }
+        html.extend_from_slice(&chunk);
+    }
+    let html = std::str::from_utf8(&html).ok()?;
+    Some(parse_model_variants(html, model_name))
+}
+
 fn safe_pull_error(message: &str) -> String {
     let normalized = message.split_whitespace().collect::<Vec<_>>().join(" ");
     let bounded = normalized.chars().take(256).collect::<String>();
@@ -909,8 +1073,122 @@ mod tests {
                 "cloud": false,
                 "downloads": "6,522,021 downloads",
                 "sizes": ["27b"],
+                "downloadSize": null,
+                "variants": [],
             })
         );
+    }
+
+    #[test]
+    fn parses_default_model_download_size_from_ollama_tags_page() {
+        let html = r#"
+            <div class="group px-4 py-3">
+              <div class="hidden md:flex flex-col">
+                <div class="grid grid-cols-12 items-center">
+                  <span class="col-span-6"><a href="/library/qwen3:latest">qwen3:latest</a></span>
+                  <p class="col-span-2 text-neutral-500">5.2GB</p>
+                  <p class="col-span-2">40K</p>
+                </div>
+              </div>
+            </div>
+        "#;
+
+        assert_eq!(
+            default_download_size(&parse_model_variants(html, "qwen3")),
+            Some("5.2GB".into())
+        );
+    }
+
+    #[test]
+    fn omits_download_size_when_default_tag_or_valid_size_is_missing() {
+        let missing_latest = r#"
+            <div class="group px-4 py-3">
+              <a href="/library/qwen3:8b">qwen3:8b</a>
+              <p class="col-span-2">5.2GB</p>
+            </div>
+        "#;
+        let invalid_size = r#"
+            <div class="group px-4 py-3">
+              <a href="/library/qwen3:latest">qwen3:latest</a>
+              <p class="col-span-2">unknown</p>
+            </div>
+        "#;
+
+        assert_eq!(
+            default_download_size(&parse_model_variants(missing_latest, "qwen3")),
+            None
+        );
+        assert_eq!(
+            default_download_size(&parse_model_variants(invalid_size, "qwen3")),
+            None
+        );
+    }
+
+    #[test]
+    fn accepts_download_size_ranges() {
+        assert!(valid_download_size("39GB - 46GB"));
+        assert!(valid_download_size("130GB - 138GB"));
+        assert!(!valid_download_size("39GB - unknown"));
+    }
+
+    #[test]
+    fn parses_parameter_tags_and_download_sizes_from_ollama_tags_page() {
+        let html = r#"
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:latest">ripple-preview:latest</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB - 46GB</p>
+              </div>
+            </div>
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:65b">ripple-preview:65b</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB - 46GB</p>
+              </div>
+            </div>
+            <div class="group px-4 py-3">
+              <a href="/library/ripple-preview:65b-q4_K_M">ripple-preview:65b-q4_K_M</a>
+              <div class="grid grid-cols-12 items-center">
+                <p class="col-span-2">39GB</p>
+              </div>
+            </div>
+            <a href="/library/other:8b">other:8b</a>
+        "#;
+
+        assert_eq!(
+            parse_model_variants(html, "ripple-preview"),
+            vec![
+                ModelVariant {
+                    tag: "latest".into(),
+                    download_size: Some("39GB - 46GB".into()),
+                },
+                ModelVariant {
+                    tag: "65b".into(),
+                    download_size: Some("39GB - 46GB".into()),
+                },
+                ModelVariant {
+                    tag: "65b-q4_K_M".into(),
+                    download_size: Some("39GB".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn validates_catalog_model_names_before_building_library_urls() {
+        for name in ["qwen3", "gemma-3.1", "model_name.v2"] {
+            assert!(valid_catalog_model_name(name));
+        }
+        for name in [
+            "",
+            "../tags",
+            "qwen3/tags",
+            "https://example.com",
+            "has space",
+        ] {
+            assert!(!valid_catalog_model_name(name));
+        }
+        assert!(!valid_catalog_model_name(&"a".repeat(121)));
     }
 
     #[test]
@@ -1422,6 +1700,7 @@ fn main() {
             ollama_connection,
             ollama_models,
             ollama_catalog,
+            ollama_catalog_model,
             ollama_pull_model,
             ollama_cancel_pull,
             ollama_model_details,
